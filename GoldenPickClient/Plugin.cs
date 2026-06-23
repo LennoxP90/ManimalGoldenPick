@@ -43,11 +43,6 @@ namespace Manimal.GoldenPick
         // result on the 5th raid. off by default — its a tuning/dev tool.
         public static ConfigEntry<bool> RaidCounterOverlayEnabled;
 
-        // debug viz: when on, the sheen cube proxy is also drawn as a bright magenta solid
-        // OVER the final camera target — bypasses stencil so you can SEE the cube's actual
-        // world position even when the real sheen is stencil-rejected. used to diagnose
-        // "where is my cube actually" when sheen doesn't show (especially preview-cam path).
-        public static ConfigEntry<bool> SheenCubeDebugVisible;
 
         // the live relay link. null when both send + receive are disabled.
         // internal because RelayClient is internal — a public field cant expose it,
@@ -89,9 +84,6 @@ namespace Manimal.GoldenPick
 
             RaidCounterOverlayEnabled = Config.Bind("Debug", "RaidCounterOverlay", false,
                 "Top-right overlay showing the relay's survived-raid counter (debug).");
-            SheenCubeDebugVisible = Config.Bind("Debug", "SheenCubeDebugVisible", false,
-                "Draws a bright magenta solid where the sheen projector cube sits, on top of "
-                + "everything (bypasses stencil). Use to diagnose where the cube is in each camera.");
             gameObject.AddComponent<RaidCounter.RaidCounterOverlay>();
 
                 Relay = new RelayClient(BuildRelayUrl());

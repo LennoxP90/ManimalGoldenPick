@@ -56,28 +56,6 @@ namespace Manimal.GoldenPick.GoldenPickSheen
 
             public readonly Dictionary<Camera, CommandBuffer> CmdBuffers   = new Dictionary<Camera, CommandBuffer>();
             public readonly Dictionary<Camera, CommandBuffer> EmissBuffers = new Dictionary<Camera, CommandBuffer>();
-            // debug viz pass — drawn AfterEverything, bypasses stencil. shows where the cube
-            // sits when the real sheen is rejected. gated on Plugin.SheenCubeDebugVisible.
-            public readonly Dictionary<Camera, CommandBuffer> DebugBuffers = new Dictionary<Camera, CommandBuffer>();
-        }
-
-        // unlit, alpha-blended, bright magenta — Sprites/Default has no stencil so we see
-        // the cube regardless of what's already in the buffer
-        private static Material _debugMat;
-        private static Material DebugMat
-        {
-            get
-            {
-                if (_debugMat == null)
-                {
-                    var sh = Shader.Find("Sprites/Default");
-                    if (sh != null)
-                    {
-                        _debugMat = new Material(sh) { color = new Color(1f, 0f, 1f, 0.6f) };
-                    }
-                }
-                return _debugMat;
-            }
         }
 
         // composite key "{itemId}@{scope}" — lets one pick have simultaneous instances across
@@ -255,13 +233,6 @@ namespace Manimal.GoldenPick.GoldenPickSheen
                     cam.AddCommandBuffer(CameraEvent.AfterLighting, eBuf);
                     inst.EmissBuffers[cam] = eBuf;
                 }
-                // debug viz at AfterEverything (latest hook) so it sits on top of stencil/depth
-                if (Plugin.SheenCubeDebugVisible.Value && !inst.DebugBuffers.ContainsKey(cam))
-                {
-                    var dBuf = new CommandBuffer { name = "GoldenSheenDebug_" + inst.Key };
-                    cam.AddCommandBuffer(CameraEvent.AfterEverything, dBuf);
-                    inst.DebugBuffers[cam] = dBuf;
-                }
             }
         }
 
@@ -353,18 +324,6 @@ namespace Manimal.GoldenPick.GoldenPickSheen
                     _emissMpb.SetFloat(OpacityId, EmissiveIntensity);
                     eBuf.DrawMesh(_cube, matrix, inst.Mat, 0, 0, _emissMpb);
                 }
-
-                // pass 3 (debug only): solid magenta over the final image. cleared every frame
-                // so toggling the config off mid-render doesn't leave last frame's pose ghosting.
-                if (inst.DebugBuffers.TryGetValue(cam, out var dBuf))
-                {
-                    dBuf.Clear();
-                    if (Plugin.SheenCubeDebugVisible.Value && DebugMat != null)
-                    {
-                        dBuf.SetRenderTarget(BuiltinRenderTextureType.CameraTarget);
-                        dBuf.DrawMesh(_cube, matrix, DebugMat, 0, 0);
-                    }
-                }
             }
         }
 
@@ -374,8 +333,6 @@ namespace Manimal.GoldenPick.GoldenPickSheen
             inst.CmdBuffers.Clear();
             foreach (var kvp in inst.EmissBuffers) if (kvp.Key) kvp.Key.RemoveCommandBuffer(CameraEvent.AfterLighting, kvp.Value);
             inst.EmissBuffers.Clear();
-            foreach (var kvp in inst.DebugBuffers) if (kvp.Key) kvp.Key.RemoveCommandBuffer(CameraEvent.AfterEverything, kvp.Value);
-            inst.DebugBuffers.Clear();
         }
 
         private void RemoveCameraFromInstance(SheenInstance inst, Camera cam)
@@ -389,11 +346,6 @@ namespace Manimal.GoldenPick.GoldenPickSheen
             {
                 if (cam) cam.RemoveCommandBuffer(CameraEvent.AfterLighting, eBuf);
                 inst.EmissBuffers.Remove(cam);
-            }
-            if (inst.DebugBuffers.TryGetValue(cam, out var dBuf))
-            {
-                if (cam) cam.RemoveCommandBuffer(CameraEvent.AfterEverything, dBuf);
-                inst.DebugBuffers.Remove(cam);
             }
         }
 
