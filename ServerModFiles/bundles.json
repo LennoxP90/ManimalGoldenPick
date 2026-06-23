@@ -1,0 +1,43 @@
+{
+  "manifest": [
+    {
+      "key": "manimal/goldenaxe_container.bundle",
+      "dependencyKeys": [
+        "shaders",
+        "assets/content/weapons/weapon_root_anim_fix.bundle"
+      ]
+    },
+    {
+      "key": "manimal/goldencase.bundle",
+      "dependencyKeys": [
+        "shaders"
+      ]
+    },
+    {
+      "key": "manimal/goldfuse.bundle",
+      "dependencyKeys": []
+    },
+    {
+      "key": "manimal/goldkillsound.bundle",
+      "dependencyKeys": []
+    },
+    {
+      "key": "manimal/goldmat.bundle",
+      "dependencyKeys": [
+        "shaders"
+      ]
+    },
+    {
+      "key": "manimal/goldrevealseq.bundle",
+      "dependencyKeys": []
+    },
+    {
+      "key": "manimal/goldrevealsound.bundle",
+      "dependencyKeys": []
+    },
+    {
+      "key": "manimal/killstreaksheen.bundle",
+      "dependencyKeys": []
+    }
+  ]
+}

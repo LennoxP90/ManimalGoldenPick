@@ -1,0 +1,30 @@
+{
+  "6a371980784a6d8a3ec033ed": {
+    "itemTplToClone": "5c0126f40db834002a125382",
+    "parentId": "5447e1d04bdc2dff2f8b4567",
+    "handbookParentId": "5b5f7a0886f77409407a7f96",
+    "overrideProperties": {
+      "BackgroundColor": "yellow",
+      "RarityPvE": "Superrare",
+      "ExaminedByDefault": false,
+      "Prefab": {
+        "path": "manimal/goldenaxe_container.bundle",
+        "rcid": ""
+      }
+    },
+    "locales": {
+      "en": {
+        "name": "Golden Ice Pick",
+        "shortName": "GoldenPick",
+        "description": "Imbued with an ancient power."
+      }
+    },
+    "fleaPriceRoubles": 2000000000,
+    "handbookPriceRoubles": 2000000000,
+    "addtoBots": false,
+    "addtoItemBlacklist": true,
+    "addtoStaticLootContainers": false,
+    "addLooseLoot": false,
+    "addtoTraders": false
+  }
+}

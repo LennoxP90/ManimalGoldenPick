@@ -1,0 +1,120 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- AbstractModMetadata's overridable members carry nullable annotations; match its
+         context so the ? annotations in Mod.cs dont warn (CS8632). SPT's own projects
+         build with nullable enabled. -->
+    <Nullable>enable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <RootNamespace>GoldenPick</RootNamespace>
+    <AssemblyName>GoldenPickServer</AssemblyName>
+    <Version>$(ModVersion)</Version>
+    <Authors>$(ModUsername)</Authors>
+    <Company>$(ModUsername)</Company>
+    <Product>$(ModDisplayName)</Product>
+    <Description>Registers the Golden Ice Pick (cloned crowbar) and backs the global earn-notification mod.</Description>
+    <Copyright>Copyright © $(ModUsername)</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
+    <PackageReference Include="SPTarkov.Common" Version="4.0.13" />
+    <PackageReference Include="SPTarkov.DI" Version="4.0.13" />
+    <PackageReference Include="SPTarkov.Server.Core" Version="4.0.13" />
+    <PackageReference Include="WTT-ServerCommonLib" Version="2.0.20" />
+  </ItemGroup>
+
+  <!--
+    forces the client to build before the server. ReferenceOutputAssembly=false
+    means we dont link against it (different target frameworks) — we just need the
+    build order so PackageModForDistribution below can find GoldenPickClient.dll on disk.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\GoldenPickClient\GoldenPickClient.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+      <SkipGetTargetFrameworkProperties>true</SkipGetTargetFrameworkProperties>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!--
+    PostBuild: deploy DLL + ServerModFiles into the dev SPT mod folder so the server
+    picks them up on next launch. Data files copy BEFORE the DLL so a running server
+    (which locks the DLL) doesnt block the JSON sync. Deletions are NOT mirrored —
+    delete a removed JSON's deployed counterpart by hand.
+  -->
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <PropertyGroup>
+      <DevModDir>D:\SPTDev\SPT\user\mods\GoldenPickServer</DevModDir>
+      <ServerModFilesDir>$(ProjectDir)..\ServerModFiles</ServerModFilesDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <!-- the ENTIRE ServerModFiles tree — db, bundles, bundles.json, anything -->
+      <AllServerModFiles Include="$(ServerModFilesDir)\**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(DevModDir)" />
+    <!-- mirror ServerModFiles into the dev mod folder, preserving its structure.
+         deletions are NOT mirrored — remove a deleted file's deployed copy by hand. -->
+    <Copy
+      SourceFiles="@(AllServerModFiles)"
+      DestinationFiles="@(AllServerModFiles->'$(DevModDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DevModDir)" />
+  </Target>
+
+  <!--
+    PackageModForDistribution: assembles a single release zip with both sides in their
+    install-ready layout, version-stamped so releases dont overwrite each other:
+
+      Manimal-GoldenPick-{version}.zip
+      ├── BepInEx/plugins/GoldenPick/GoldenPickClient.dll
+      └── SPT/user/mods/GoldenPickServer/
+          ├── GoldenPickServer.dll
+          └── db/...
+
+    runs after the server build. the ProjectReference above forces the client to
+    build first so its DLL is on disk when we pick it up.
+  -->
+  <Target Name="PackageModForDistribution" AfterTargets="Build">
+    <PropertyGroup>
+      <ZipFileName>$(ModUsername)-$(ModDisplayName)-$(ModVersion).zip</ZipFileName>
+      <RepoRoot>$(ProjectDir)..\</RepoRoot>
+      <TempPackageDir>$(ProjectDir)obj\Package</TempPackageDir>
+      <ServerOutDir>$(TempPackageDir)\SPT\user\mods\GoldenPickServer</ServerOutDir>
+      <ClientOutDir>$(TempPackageDir)\BepInEx\plugins\GoldenPick</ClientOutDir>
+      <ServerModFilesDir>$(RepoRoot)ServerModFiles</ServerModFilesDir>
+      <ClientBinDir>$(RepoRoot)GoldenPickClient\bin\$(Configuration)\netstandard2.1</ClientBinDir>
+      <ClientDll>$(ClientBinDir)\GoldenPickClient.dll</ClientDll>
+      <!-- runtime dep CounterfeitDetector pulls in for Ed25519 signature verify. MUST ship
+           in the zip — without it the plugin loads but the unpack patch silently throws when
+           it tries to JIT the verifier code, vanilla EFT unpack runs, anti-cheat is dead. -->
+      <ClientBouncyCastleDll>$(ClientBinDir)\BouncyCastle.Cryptography.dll</ClientBouncyCastleDll>
+    </PropertyGroup>
+    <ItemGroup>
+      <AllServerModFiles Include="$(ServerModFilesDir)\**\*" />
+    </ItemGroup>
+
+    <Message Text="--- Packaging $(ZipFileName) ---" Importance="high" />
+    <RemoveDir Directories="$(TempPackageDir)" />
+    <MakeDir Directories="$(ServerOutDir)" />
+    <MakeDir Directories="$(ClientOutDir)" />
+
+    <!-- server side: DLL + the whole ServerModFiles tree (db, bundles, bundles.json) -->
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ServerOutDir)" />
+    <Copy
+      SourceFiles="@(AllServerModFiles)"
+      DestinationFiles="@(AllServerModFiles->'$(ServerOutDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
+
+    <!-- client side: main DLL + BouncyCastle runtime dep -->
+    <Error Text="Client DLL not found at $(ClientDll). Build the solution (or the client project) before packaging." Condition="!Exists('$(ClientDll)')" />
+    <Error Text="BouncyCastle.Cryptography.dll not found at $(ClientBouncyCastleDll). The client csproj should have CopyLocalLockFileAssemblies=true — rebuild the client project first." Condition="!Exists('$(ClientBouncyCastleDll)')" />
+    <Copy SourceFiles="$(ClientDll)" DestinationFolder="$(ClientOutDir)" />
+    <Copy SourceFiles="$(ClientBouncyCastleDll)" DestinationFolder="$(ClientOutDir)" />
+
+    <ZipDirectory SourceDirectory="$(TempPackageDir)" DestinationFile="$(RepoRoot)$(ZipFileName)" Overwrite="true" />
+    <RemoveDir Directories="$(TempPackageDir)" />
+    <Message Text="--- $(ZipFileName) packaged at $(RepoRoot) ---" Importance="high" />
+  </Target>
+</Project>

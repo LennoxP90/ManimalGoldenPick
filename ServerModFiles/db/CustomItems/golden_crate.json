@@ -1,0 +1,44 @@
+{
+ "9c2f1a0b7e6d4c83a5f10b2e": {
+    "itemTplToClone": "634959225289190e5e773b3b",
+    "parentId": "62f109593b54472778797866",
+    "handbookParentId": "5b619f1a86f77450a702a6f3",
+    "overrideProperties": {
+      "ExaminedByDefault": false,
+      "QuestItem": false,
+      "CanSellOnRagfair": false,
+      "Foldable": false,
+      "Weight": 1,
+      "Height": 2,
+      "Width": 3,
+      "StackMaxSize": 1,
+      "RarityPvE": "Superrare",
+      "BackgroundColor": "yellow",
+	  "Prefab": {
+        "path": "manimal/goldencase.bundle",
+        "rcid": ""
+      }
+    },
+    "locales": {
+      "en": {
+        "name": "Sealed Golden Crate",
+        "shortName": "GoldCrate",
+        "description": "A heavy sealed crate, warm to the touch. Something legendary rattles inside. Unpack it and watch the show."
+      }
+    },
+    "isRandomLootContainer": true,
+    "randomLootContainerRewards": {
+      "rewardCount": 1,
+      "foundInRaid": true,
+      "rewardTplPool": {
+        "6a371980784a6d8a3ec033ed": 1
+      }
+    },
+    "fleaPriceRoubles": 0,
+    "handbookPriceRoubles": 100000,
+    "addtoItemBlacklist": true,
+    "addtoInventorySlots": [],
+    "addtoModSlots": false,
+    "modSlot": []
+  }
+}

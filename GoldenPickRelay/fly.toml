@@ -1,0 +1,34 @@
+# Fly.io config for the GoldenPick relay.
+# IMPORTANT: app names are globally unique across all of Fly. "goldenpick-relay" is
+# almost certainly taken — change it to something like "goldenpick-relay-<yourname>".
+# whatever you set here is what goes in the client's RelayUrl config:
+#   wss://<app-name>.fly.dev/ws
+app = "goldenpan-relay-manimal"
+primary_region = "iad"   # pick one near you: fly platform regions
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true            # clients connect with wss://
+  # keep one machine alive at all times — a relay must be up whenever ANY player is
+  # online, and it holds long-lived websocket connections.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[mounts]
+  source = "goldenpick_data"
+  destination = "/data"
+
+# IMPORTANT: single-volume apps must use "immediate" deploys. Fly's default rolling
+# strategy creates the new machine BEFORE killing the old one — but a Fly volume can
+# only be claimed by ONE machine, so the new machine gets stuck in `created` state and
+# the deploy never finishes. immediate = destroy-before-create, which lets the volume
+# transfer cleanly. brief outage during deploy (~30s) is the tradeoff.
+[deploy]
+  strategy = "immediate"
