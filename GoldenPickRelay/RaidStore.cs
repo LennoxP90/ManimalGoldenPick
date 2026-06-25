@@ -176,13 +176,14 @@ public sealed class RaidStore : IDisposable
         }
     }
 
-    // fills/refreshes the identity columns on an existing pick. SPT-side calls this after
-    // mailing an admin-granted pick (so owner_profile_id finally has a value) AND any time
-    // we observe a fresh nickname for an existing profileId (rename propagation). silently
-    // skips if the pick doesn't exist (could happen if SPT-side mail race beats grant write).
-    public void UpdateOwnerProfile(string pickId, string profileId, string nickname)
+    // fills/refreshes the identity columns. SECURITY-CRITICAL: only allowed when the row's
+    // current owner_profile_id is NULL (admin-grant fill-in) OR equal to the incoming one
+    // (rename catch-up). this blocks credit-stealing via /pick/update-owner-profile — an
+    // attacker can't rewrite someone else's pick to their own profileId.
+    // returns true if a row was actually updated, false if pick missing or profile-mismatch.
+    public bool UpdateOwnerProfile(string pickId, string profileId, string nickname)
     {
-        if (string.IsNullOrEmpty(pickId) || string.IsNullOrEmpty(profileId)) return;
+        if (string.IsNullOrEmpty(pickId) || string.IsNullOrEmpty(profileId)) return false;
         lock (_lock)
         {
             using var cmd = _db.CreateCommand();
@@ -190,12 +191,13 @@ public sealed class RaidStore : IDisposable
                 UPDATE awarded_picks
                    SET owner_profile_id = $profId,
                        owner_nickname   = $nick
-                 WHERE pick_id = $id;
+                 WHERE pick_id = $id
+                   AND (owner_profile_id IS NULL OR owner_profile_id = $profId);
             ";
             cmd.Parameters.AddWithValue("$profId", profileId);
             cmd.Parameters.AddWithValue("$nick", nickname);
             cmd.Parameters.AddWithValue("$id", pickId);
-            cmd.ExecuteNonQuery();
+            return cmd.ExecuteNonQuery() > 0;
         }
     }
 

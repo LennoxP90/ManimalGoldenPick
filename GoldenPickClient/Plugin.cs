@@ -25,7 +25,6 @@ namespace Manimal.GoldenPick
         public static Plugin Instance;
 
         // --- config ---
-        public static ConfigEntry<KeyboardShortcut> DebugEarnKey;
         // on-screen size (px) of the reveal effect square that rides the icon. exposed so you
         // can drag it to a size you like in the config manager (it's read live each frame).
         public static ConfigEntry<float> RevealSizePx;
@@ -54,10 +53,6 @@ namespace Manimal.GoldenPick
             LogSource = Logger;
             Instance = this;
             LogSource.LogInfo("GoldenPick loaded!");
-
-            DebugEarnKey = Config.Bind("Debug", "DebugEarnPan",
-                new KeyboardShortcut(UnityEngine.KeyCode.F9),
-                "Debug hotkey: fires the Golden Ice Pick earn flow (local toast + broadcast). Testing only.");
 
             RevealSizePx = Config.Bind("Reveal", "RevealSizePx", 800f,
                 new ConfigDescription("On-screen size (px) of the reveal effect over the item icon.",
@@ -140,13 +135,6 @@ namespace Manimal.GoldenPick
 
         private void Update()
         {
-            if (DebugEarnKey.Value.IsDown())
-                GoldenPickEarner.EarnGoldenPick("debug keybind");
-
-            // (raid-end gild teardown is now Harmony-driven via GameWorldDisposeRestorePatch
-            // — fires deterministically at GameWorld.Dispose, before the menu char pulls the
-            // pooled equipment models.)
-
             // drain inbound relay events on the main thread so the toast api is happy
             if (Relay != null )
             {

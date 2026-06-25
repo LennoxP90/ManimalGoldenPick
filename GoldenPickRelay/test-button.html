@@ -61,6 +61,10 @@
         <label>Shared key (optional)</label>
         <input id="key" placeholder="if relay uses GOLDENPAN_KEY" />
       </div>
+      <div>
+        <label>Admin key (required for grant/update/reset)</label>
+        <input id="adminKey" type="password" placeholder="GOLDENPAN_ADMIN_KEY — never shipped" />
+      </div>
     </div>
 
     <button class="fire" id="fire">🔔 Trigger Global Pan Alert</button>
@@ -171,13 +175,20 @@
   });
 
   // derives the HTTP base from the WS URL ("wss://host/ws" → "https://host") and appends
-  // /<path>?key=... using the separate key input. shared by both POST buttons below.
-  function buildHttpUrl(path) {
+  // /<path>?key=...&adminKey=... using the separate key inputs. adminKey is required for
+  // grant-pick / update-pick / admin/reset / test/grant-crate; key is the legacy soft gate.
+  function buildHttpUrl(path, useAdminKey) {
     let wsUrl = $('url').value.trim();
     if (!wsUrl) return null;
     let httpUrl = wsUrl.replace(/^ws/, 'http').replace(/\/ws(\?|$).*/, '/' + path);
+    const params = [];
     const key = $('key').value.trim();
-    if (key) httpUrl += '?key=' + encodeURIComponent(key);
+    if (key) params.push('key=' + encodeURIComponent(key));
+    if (useAdminKey) {
+      const adminKey = $('adminKey').value.trim();
+      if (adminKey) params.push('adminKey=' + encodeURIComponent(adminKey));
+    }
+    if (params.length) httpUrl += '?' + params.join('&');
     return httpUrl;
   }
 
@@ -187,7 +198,7 @@
   $('grant').addEventListener('click', async () => {
     const player = $('player').value.trim();
     if (!player) { log('enter a player name first'); return; }
-    const httpUrl = buildHttpUrl('test/grant-crate');
+    const httpUrl = buildHttpUrl('test/grant-crate', true);
     if (!httpUrl) { log('enter a relay URL first'); return; }
     try {
       const resp = await fetch(httpUrl, {
@@ -208,7 +219,7 @@
   $('grant-pick').addEventListener('click', async () => {
     const player = $('player').value.trim();
     if (!player) { log('enter a player name first'); return; }
-    const httpUrl = buildHttpUrl('admin/grant-pick');
+    const httpUrl = buildHttpUrl('admin/grant-pick', true);
     if (!httpUrl) { log('enter a relay URL first'); return; }
 
     const body = {
@@ -240,7 +251,7 @@
   $('update-pick').addEventListener('click', async () => {
     const pw = $('grant-pw').value.trim();
     if (!pw) { log('password is required to identify which pick to update'); return; }
-    const httpUrl = buildHttpUrl('admin/update-pick');
+    const httpUrl = buildHttpUrl('admin/update-pick', true);
     if (!httpUrl) { log('enter a relay URL first'); return; }
 
     const body = {

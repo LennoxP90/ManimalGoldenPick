@@ -33,8 +33,16 @@ app.UseWebSockets();
 var clients = new ConcurrentDictionary<Guid, ClientConn>();
 var ipCounts = new ConcurrentDictionary<string, int>();
 
-// soft-gate key (public — see note above). unset = relay runs open.
+// soft-gate key. shipped in BepInEx source — NOT real security, just stops casual scanners.
+// gates routes the SPT server posts to (raid-end, crate-derived register, owner-profile fill).
 var apiKey = Environment.GetEnvironmentVariable("GOLDENPAN_KEY");
+
+// admin key — Fly-secret only, NEVER shipped to any client. gates the destructive routes
+// (grant-pick, update-pick, admin/reset, test/grant-crate). if unset, those routes 401 every
+// request — fail closed to avoid an unconfigured prod deploy leaving them wide open.
+var adminKey = Environment.GetEnvironmentVariable("GOLDENPAN_ADMIN_KEY");
+bool IsAdmin(HttpContext ctx) =>
+    !string.IsNullOrEmpty(adminKey) && ctx.Request.Query["adminKey"].ToString() == adminKey;
 
 // --- limits (the actual abuse mitigation) ---
 const double MinSendIntervalSeconds = 2.0; // per-connection: 1 event / 2s
@@ -153,6 +161,17 @@ app.Map("/ws", async context =>
             // global flood guard
             if (!AllowGlobalMessage()) continue;
 
+            // pick_earned events are spoofable — anyone with the WS could fire one and make
+            // every client show a toast for any nickname. drop client-sent pick_earned at
+            // the relay; real pick_earned events are generated SERVER-SIDE inside the
+            // grant/redeem/register-crate-derived endpoints (where there's actual signed
+            // state behind the claim). this catches old clients too — no client update needed.
+            if (msg.Contains("\"pick_earned\"") || msg.Contains("\"Type\":\"pick_earned\""))
+            {
+                app.Logger.LogWarning("[ws] dropped client-sent pick_earned from {ip} (spoofing attempt or legacy client broadcast)", ip);
+                continue;
+            }
+
             await Broadcast(msg, conn.Id);
         }
     }
@@ -164,6 +183,16 @@ app.Map("/ws", async context =>
     clients.TryRemove(conn.Id, out _);
     ipCounts.AddOrUpdate(ip, 0, (_, c) => Math.Max(0, c - 1));
     Console.WriteLine($"[-] {conn.Id} ip={ip} disconnected ({clients.Count} total)");
+});
+
+// builds the legacy pick_earned message shape that pre-v1.0 clients listen for. emitted
+// SERVER-SIDE only — the WS receive loop drops client-sent pick_earned to stop spoofing.
+// kept identical to the old payload so old clients render the same toast as before.
+string EmitLegacyPickEarned(string nickname) => System.Text.Json.JsonSerializer.Serialize(new
+{
+    Type = "pick_earned",
+    Player = nickname,
+    Ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
 });
 
 // rebroadcast to everyone except the sender. per-socket SendLock because two senders
@@ -283,12 +312,11 @@ static string MintMongoId()
 // the hash. plain password is what the user types into the console for redemption (Stage C).
 //
 // gated by GOLDENPAN_KEY same as other admin/test routes — soft-gate, but the only path
-// to mint a CUSTOM-signed pick (anyone can do this if they have the key; intended for
-// you as the mod author).
+// admin route — gated by GOLDENPAN_ADMIN_KEY (Fly secret, NEVER shipped to clients).
+// mints a custom-signed pick. requires ?adminKey=... query param.
 app.MapPost("/admin/grant-pick", async (AdminGrantPickRequest req, HttpContext ctx) =>
 {
-    if (!string.IsNullOrEmpty(apiKey) && ctx.Request.Query["key"].ToString() != apiKey)
-        return Results.Unauthorized();
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
     if (string.IsNullOrWhiteSpace(req.Nickname))
         return Results.BadRequest(new { error = "nickname required" });
 
@@ -330,6 +358,9 @@ app.MapPost("/admin/grant-pick", async (AdminGrantPickRequest req, HttpContext c
         PickNumber = req.PickNumber,
     });
     await Broadcast(grantMsg, Guid.Empty);
+    // legacy pick_earned for OLD clients — they still listen for it but we no longer
+    // accept it from the WS. server-issued here means only real grants trigger toasts.
+    await Broadcast(EmitLegacyPickEarned(req.Nickname), Guid.Empty);
 
     app.Logger.LogInformation("[admin/grant-pick] BROADCAST nickname={n} pickId={p} number={num} color={c}",
         req.Nickname, pickId, req.PickNumber?.ToString() ?? "(none)", req.SheenColorHex ?? "(default)");
@@ -342,8 +373,7 @@ app.MapPost("/admin/grant-pick", async (AdminGrantPickRequest req, HttpContext c
 // invalidates its cache + the SPT server overwrites its on-disk metadata.
 app.MapPost("/admin/update-pick", async (AdminUpdatePickRequest req, HttpContext ctx) =>
 {
-    if (!string.IsNullOrEmpty(apiKey) && ctx.Request.Query["key"].ToString() != apiKey)
-        return Results.Unauthorized();
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
     if (string.IsNullOrWhiteSpace(req.Password))
         return Results.BadRequest(new { error = "password required to identify the pick" });
 
@@ -434,6 +464,8 @@ app.MapPost("/pick/redeem", async (RedeemRequest req) =>
         PickNumber = existing.PickNumber,
     });
     await Broadcast(grantMsg, Guid.Empty);
+    // legacy pick_earned toast for OLD clients
+    await Broadcast(EmitLegacyPickEarned(req.CurrentNickname), Guid.Empty);
 
     app.Logger.LogInformation("[pick/redeem] REDEEMED nickname={n} oldOwner={o} newPickId={p}",
         req.CurrentNickname, existing.OwnerNickname, newPickId);
@@ -447,7 +479,7 @@ app.MapPost("/pick/redeem", async (RedeemRequest req) =>
 //
 // admin-key gated: this writes to authoritative state. SPT server has the key in its
 // relay-client config; player-only clients (BepInEx) never call this directly.
-app.MapPost("/pick/register-crate-derived", (RegisterCrateDerivedRequest req, HttpContext ctx) =>
+app.MapPost("/pick/register-crate-derived", async (RegisterCrateDerivedRequest req, HttpContext ctx) =>
 {
     if (!string.IsNullOrEmpty(apiKey) && ctx.Request.Query["key"].ToString() != apiKey)
         return Results.Unauthorized();
@@ -458,8 +490,13 @@ app.MapPost("/pick/register-crate-derived", (RegisterCrateDerivedRequest req, Ht
     var inserted = store.RegisterCrateDerivedPickIfAbsent(
         req.PickId, req.OwnerProfileId, req.OwnerNickname, req.AwardedAt, req.Signature, req.PickNumber);
     if (inserted)
+    {
         app.Logger.LogInformation("[pick/register-crate-derived] NEW pickId={p} profileId={pid} nickname={n} #{num}",
             req.PickId, req.OwnerProfileId ?? "(none)", req.OwnerNickname, req.PickNumber?.ToString() ?? "?");
+        // legacy pick_earned toast for OLD clients — only on first insert so idempotent
+        // re-registrations from the startup backfill dont retrigger toasts every restart.
+        await Broadcast(EmitLegacyPickEarned(req.OwnerNickname), Guid.Empty);
+    }
     return Results.Ok(new { ok = true, inserted });
 });
 
@@ -469,8 +506,7 @@ app.MapPost("/pick/register-crate-derived", (RegisterCrateDerivedRequest req, Ht
 // curl can't accidentally clear test data.
 app.MapPost("/admin/reset", (HttpContext ctx) =>
 {
-    if (!string.IsNullOrEmpty(apiKey) && ctx.Request.Query["key"].ToString() != apiKey)
-        return Results.Unauthorized();
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
     if (ctx.Request.Query["confirm"].ToString() != "yes")
         return Results.BadRequest(new { error = "add ?confirm=yes to actually wipe" });
 
@@ -496,7 +532,15 @@ app.MapPost("/pick/update-owner-profile", (UpdateOwnerProfileRequest req, HttpCo
         || string.IsNullOrWhiteSpace(req.Nickname))
         return Results.BadRequest(new { error = "pickId, profileId, nickname required" });
 
-    store.UpdateOwnerProfile(req.PickId, req.ProfileId, req.Nickname);
+    var updated = store.UpdateOwnerProfile(req.PickId, req.ProfileId, req.Nickname);
+    if (!updated)
+    {
+        // either the pick doesn't exist OR the row already has a different owner_profile_id
+        // (credit-steal attempt). either way, refuse silently with a clear log line.
+        app.Logger.LogWarning("[pick/update-owner-profile] REJECTED pickId={p} attempt-profileId={pid} (pick missing or owner mismatch)",
+            req.PickId, req.ProfileId);
+        return Results.NotFound(new { ok = false, reason = "pick_missing_or_owner_mismatch" });
+    }
     app.Logger.LogInformation("[pick/update-owner-profile] pickId={p} profileId={pid} nickname={n}",
         req.PickId, req.ProfileId, req.Nickname);
     return Results.Ok(new { ok = true });
@@ -579,8 +623,7 @@ app.MapGet("/health", () =>
 // share the key publicly.
 app.MapPost("/test/grant-crate", async (TestGrantRequest req, HttpContext ctx) =>
 {
-    if (!string.IsNullOrEmpty(apiKey) && ctx.Request.Query["key"].ToString() != apiKey)
-        return Results.Unauthorized();
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
     if (string.IsNullOrWhiteSpace(req.Nickname))
         return Results.BadRequest(new { error = "nickname required" });
 

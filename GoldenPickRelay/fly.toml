@@ -22,7 +22,7 @@ primary_region = "iad"   # pick one near you: fly platform regions
   memory = "256mb"
 
 [mounts]
-  source = "goldenpick_data"
+  source = "goldenpan_data"   # legacy volume name — kept to avoid migrating the SQLite DB
   destination = "/data"
 
 # IMPORTANT: single-volume apps must use "immediate" deploys. Fly's default rolling
