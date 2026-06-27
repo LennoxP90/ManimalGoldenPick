@@ -342,8 +342,15 @@ app.MapPost("/admin/grant-pick", async (AdminGrantPickRequest req, HttpContext c
     // /pick/update-owner-profile after the pick lands in the recipient's mailbox (server
     // knows its own sessionId at that point). kill verification falls back to nickname
     // comparison for that brief window.
-    store.RecordPickAward(pickId, ownerProfileId: null, req.Nickname, awardedAt, sig,
+    var recorded = store.RecordPickAward(pickId, ownerProfileId: null, req.Nickname, awardedAt, sig,
         req.SheenColorHex, req.CustomName, req.CustomDescription, req.PickNumber, pwHash);
+    if (!recorded)
+    {
+        // pickId collided with a blacklisted entry (astronomically unlikely with a fresh
+        // MongoId — but if it ever happens, refuse rather than silently dropping the grant)
+        app.Logger.LogWarning("[admin/grant-pick] pickId {p} is blacklisted — refusing grant", pickId);
+        return Results.Conflict(new { ok = false, reason = "pickId_blacklisted" });
+    }
 
     var grantMsg = System.Text.Json.JsonSerializer.Serialize(new
     {
@@ -504,6 +511,38 @@ app.MapPost("/pick/register-crate-derived", async (RegisterCrateDerivedRequest r
 // crates and raid counters. PRESERVES custom picks (any row with a sheen color, name,
 // description, or password). dev-only, admin-key gated, requires ?confirm=yes so a stray
 // curl can't accidentally clear test data.
+// surgical wipe — delete one specific pick by id AND blacklist the id so future
+// re-registrations (e.g. the owner's SPT-side LeaderboardBackfillOnLoad after a server
+// restart) are refused. unlike /admin/reset (bulk crate-derived cleanup), this targets
+// a single row regardless of custom/crate status. admin-key gated.
+app.MapPost("/admin/wipe-pick", (HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
+    var pickId = ctx.Request.Query["pickId"].ToString();
+    if (string.IsNullOrWhiteSpace(pickId))
+        return Results.BadRequest(new { error = "add ?pickId=... to target a specific pick" });
+
+    var r = store.WipePickById(pickId);
+    app.Logger.LogWarning("[admin/wipe-pick] pickId={p} deleted={d} blacklisted=yes passwordOrphaned={o}",
+        pickId, r.Deleted, r.PasswordOrphaned);
+    return Results.Ok(new { ok = true, deleted = r.Deleted, blacklisted = true, passwordOrphaned = r.PasswordOrphaned });
+});
+
+// recovery — lifts the blacklist for a pickId so it can be registered again. doesn't
+// restore the leaderboard row WipePickById deleted; the owner's next backfill / unpack
+// will re-register from their local PickMetadataStore.
+app.MapPost("/admin/unblacklist-pick", (HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
+    var pickId = ctx.Request.Query["pickId"].ToString();
+    if (string.IsNullOrWhiteSpace(pickId))
+        return Results.BadRequest(new { error = "add ?pickId=... to lift the blacklist" });
+
+    var lifted = store.UnblacklistPick(pickId);
+    app.Logger.LogInformation("[admin/unblacklist-pick] pickId={p} lifted={l}", pickId, lifted);
+    return Results.Ok(new { ok = true, lifted });
+});
+
 app.MapPost("/admin/reset", (HttpContext ctx) =>
 {
     if (!IsAdmin(ctx)) return Results.Unauthorized();

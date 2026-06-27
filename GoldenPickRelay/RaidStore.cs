@@ -64,6 +64,14 @@ public sealed class RaidStore : IDisposable
                 kill_count         INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_awarded_pick_owner ON awarded_picks(owner_nickname);
+
+            -- pickIds the admin has permanently revoked. consulted by every insertion path
+            -- (admin-grant + register-crate-derived) — even if the player's local backfill
+            -- tries to re-register, the relay refuses. unblacklist via /admin/unblacklist-pick.
+            CREATE TABLE IF NOT EXISTS blacklisted_picks (
+                pick_id        TEXT PRIMARY KEY,
+                blacklisted_at INTEGER NOT NULL
+            );
         ";
         cmd.ExecuteNonQuery();
 
@@ -148,13 +156,20 @@ public sealed class RaidStore : IDisposable
     // admin-grant insert. owner_profile_id may be NULL at this stage — the admin only
     // entered a nickname; the actual profileId gets filled in by SPT-side after the pick
     // is delivered to the player's mailbox (server knows its own sessionId).
-    public void RecordPickAward(
+    // returns false silently if the pickId is blacklisted (admin previously wiped it).
+    public bool RecordPickAward(
         string pickId, string? ownerProfileId, string ownerNickname, long awardedAt, string signature,
         string? sheenColorHex, string? customName, string? customDescription,
         int? pickNumber, string? passwordHash)
     {
         lock (_lock)
         {
+            using (var bl = _db.CreateCommand())
+            {
+                bl.CommandText = "SELECT 1 FROM blacklisted_picks WHERE pick_id = $id LIMIT 1;";
+                bl.Parameters.AddWithValue("$id", pickId);
+                if (bl.ExecuteScalar() != null) return false;
+            }
             using var cmd = _db.CreateCommand();
             cmd.CommandText = @"
                 INSERT INTO awarded_picks
@@ -173,6 +188,7 @@ public sealed class RaidStore : IDisposable
             cmd.Parameters.AddWithValue("$num",   (object?)pickNumber ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$pw",    (object?)passwordHash ?? DBNull.Value);
             cmd.ExecuteNonQuery();
+            return true;
         }
     }
 
@@ -212,6 +228,15 @@ public sealed class RaidStore : IDisposable
     {
         lock (_lock)
         {
+            // blacklist gate — refuses re-register attempts for ids the admin wiped. the
+            // owner's local backfill keeps trying every server boot; the blacklist makes
+            // those silent no-ops instead of resurrection-on-restart.
+            using (var bl = _db.CreateCommand())
+            {
+                bl.CommandText = "SELECT 1 FROM blacklisted_picks WHERE pick_id = $id LIMIT 1;";
+                bl.Parameters.AddWithValue("$id", pickId);
+                if (bl.ExecuteScalar() != null) return false;
+            }
             using var cmd = _db.CreateCommand();
             cmd.CommandText = @"
                 INSERT OR IGNORE INTO awarded_picks
@@ -429,6 +454,88 @@ public sealed class RaidStore : IDisposable
             }
         }
         return rows;
+    }
+
+    public sealed record WipeResult(bool Deleted, int PasswordOrphaned);
+
+    // surgical wipe: removes ONE pick by id, blacklists the id so future re-registers
+    // (e.g. SPT-side backfill) are rejected, AND if the wiped pick had a password, clears
+    // password_hash on every OTHER pick that shares it. that last bit handles the
+    // "accidental duplicate" case — if admin grant-pick was used twice with the same
+    // password by mistake, wiping one of the dupes makes the password unredeemable across
+    // the leftover dupes (admin can then re-grant fresh).
+    public WipeResult WipePickById(string pickId)
+    {
+        if (string.IsNullOrEmpty(pickId)) return new WipeResult(false, 0);
+        lock (_lock)
+        {
+            // capture the wiped row's password hash BEFORE deleting, so we know which other
+            // rows to scrub
+            string? targetPasswordHash;
+            using (var sel = _db.CreateCommand())
+            {
+                sel.CommandText = "SELECT password_hash FROM awarded_picks WHERE pick_id = $id;";
+                sel.Parameters.AddWithValue("$id", pickId);
+                targetPasswordHash = sel.ExecuteScalar() as string;
+            }
+
+            bool deleted;
+            using (var del = _db.CreateCommand())
+            {
+                del.CommandText = "DELETE FROM awarded_picks WHERE pick_id = $id;";
+                del.Parameters.AddWithValue("$id", pickId);
+                deleted = del.ExecuteNonQuery() > 0;
+            }
+            using (var bl = _db.CreateCommand())
+            {
+                bl.CommandText = "INSERT OR IGNORE INTO blacklisted_picks (pick_id, blacklisted_at) VALUES ($id, $at);";
+                bl.Parameters.AddWithValue("$id", pickId);
+                bl.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                bl.ExecuteNonQuery();
+            }
+
+            // clear password_hash on any sibling dupes with the SAME password as the wiped
+            // pick. those rows stay on the leaderboard (with their cosmetics + kill counts)
+            // but become unredeemable. zero rows affected if the wiped pick had no password
+            // or no other pick shared it.
+            int orphaned = 0;
+            if (!string.IsNullOrEmpty(targetPasswordHash))
+            {
+                using var clr = _db.CreateCommand();
+                clr.CommandText = "UPDATE awarded_picks SET password_hash = NULL WHERE password_hash = $hash;";
+                clr.Parameters.AddWithValue("$hash", targetPasswordHash);
+                orphaned = clr.ExecuteNonQuery();
+            }
+
+            return new WipeResult(deleted, orphaned);
+        }
+    }
+
+    public bool IsBlacklisted(string pickId)
+    {
+        if (string.IsNullOrEmpty(pickId)) return false;
+        lock (_lock)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "SELECT 1 FROM blacklisted_picks WHERE pick_id = $id LIMIT 1;";
+            cmd.Parameters.AddWithValue("$id", pickId);
+            return cmd.ExecuteScalar() != null;
+        }
+    }
+
+    // recovery — lifts a blacklisted pickId so it can be registered again. doesn't restore
+    // the row that WipePickById deleted; the owner just becomes able to re-register on next
+    // backfill / unpack.
+    public bool UnblacklistPick(string pickId)
+    {
+        if (string.IsNullOrEmpty(pickId)) return false;
+        lock (_lock)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "DELETE FROM blacklisted_picks WHERE pick_id = $id;";
+            cmd.Parameters.AddWithValue("$id", pickId);
+            return cmd.ExecuteNonQuery() > 0;
+        }
     }
 
     // selective wipe: removes ONLY crate-derived picks (no authored cosmetics) + all crates

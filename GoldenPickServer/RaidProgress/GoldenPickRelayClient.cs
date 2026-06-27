@@ -21,6 +21,35 @@ public class GoldenPickRelayClient(ISptLogger<GoldenPickRelayClient> logger)
     private const string RelayKey  = "7355608";
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(8) };
 
+    // fetch every registered pickId from the relay's /leaderboard. used by the counterfeit
+    // audit to verify in-stash picks against the authoritative server-side list (vs the
+    // local PickMetadataStore which only knows about picks THIS player received). returns
+    // null on network error / non-2xx / parse failure — caller MUST treat null as "skip
+    // the audit", not "everything is counterfeit" (false positives would red-rebel legit
+    // picks during transient relay outages).
+    public async Task<HashSet<string>?> GetRegisteredPickIds()
+    {
+        try
+        {
+            var resp = await _http.GetAsync($"{RelayBase}/leaderboard");
+            if (!resp.IsSuccessStatusCode)
+            {
+                logger.Warning($"[GoldenPick] /leaderboard returned {(int)resp.StatusCode}");
+                return null;
+            }
+            var parsed = await resp.Content.ReadFromJsonAsync<LeaderboardResponse>();
+            if (parsed?.Picks == null) return null;
+            var set = new HashSet<string>(parsed.Picks.Count);
+            foreach (var p in parsed.Picks) if (!string.IsNullOrEmpty(p.PickId)) set.Add(p.PickId);
+            return set;
+        }
+        catch (Exception e)
+        {
+            logger.Warning($"[GoldenPick] /leaderboard fetch failed ({e.GetType().Name}): {e.Message}");
+            return null;
+        }
+    }
+
     // password-based pick redemption — hits relay's /pick/redeem. on success, relay broadcasts
     // a pick_grant which our existing PickGrantBridge picks up and mails. returns the result
     // so the chat command handler can tell the player "success" vs "no match".
@@ -170,4 +199,15 @@ public sealed record RedeemResponse(
     [property: JsonPropertyName("pickId")]     string? PickId,
     [property: JsonPropertyName("customName")] string? CustomName,
     [property: JsonPropertyName("pickNumber")] int?    PickNumber
+);
+
+// minimal shape of the relay's /leaderboard response — we only need pickId for the
+// counterfeit audit. other fields exist on the wire (ownerNickname, killCount, etc.)
+// but we ignore them at the deserializer.
+internal sealed record LeaderboardResponse(
+    [property: JsonPropertyName("ok")]    bool                       Ok,
+    [property: JsonPropertyName("picks")] List<LeaderboardPickEntry>? Picks
+);
+internal sealed record LeaderboardPickEntry(
+    [property: JsonPropertyName("pickId")] string PickId
 );

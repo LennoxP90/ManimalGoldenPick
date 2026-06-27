@@ -45,6 +45,7 @@ public class SurvivedRaidCrateService(
     SPTarkov.Server.Core.Models.Utils.ISptLogger<SurvivedRaidCrateService> ourLogger,
     GoldenPickRelayClient relayClient,
     CrateSignatureStore signatureStore,
+    Audit.CounterfeitPickAudit counterfeitAudit,
     MailSendService mailSendService,
     ItemHelper itemHelper,
     // --- base service deps, passed straight through ---
@@ -89,11 +90,18 @@ public class SurvivedRaidCrateService(
     public override void EndLocalRaid(MongoId sessionId, EndLocalRaidRequestData request)
     {
         // let SPT do all its normal raid-end processing first — quests, insurance, profile save.
+        // base finishing writes raid loot (including anything looted off bots) into the profile
+        // inventory, which is exactly what we want the audit to see.
         base.EndLocalRaid(sessionId, request);
 
         // fire-and-forget the relay notification. await it inside so any exception cant crash
         // the SPT raid-end flow, but DON'T let the async work block the caller.
         _ = NotifyRelayAndMaybeMail(sessionId, request);
+
+        // counterfeit sweep on the freshly-populated profile — catches picks looted off bots
+        // by other mods, console-spawns since the previous scan, etc. fire-and-forget; audit
+        // swallows its own errors. relay /leaderboard is the source of truth.
+        _ = counterfeitAudit.ScanProfile(sessionId);
     }
 
     private async Task NotifyRelayAndMaybeMail(MongoId sessionId, EndLocalRaidRequestData request)

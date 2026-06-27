@@ -1,33 +1,32 @@
 using GoldenPick.RaidProgress;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.DI;
+using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Servers;
 
 namespace GoldenPick.Audit;
 
-// boot-time scan that catches counterfeit golden picks (console-spawned, profile-edited,
-// crash-orphaned). every profile's PMC + scav inventories are scanned; any golden-pick
-// item whose Id ISN'T in PickMetadataStore gets its template rewritten to red rebel,
-// and the profile is saved.
+// counterfeit-pick scanner — runs at boot (catches anything that accumulated while the
+// server was down) and on every raid-end (catches anything looted off bots or otherwise
+// added during the raid). triggered scans only; no periodic loop.
 //
-// the rationale: real picks always flow through one of two paths that store metadata:
-//   - admin grant → /goldenpick/grant-pick → PickMetadataStore.Put
-//   - crate unpack → /goldenpick/inherit-pickmeta → PickMetadataStore.Put
-// anything that exists in inventory WITHOUT a metadata record came from somewhere we
-// don't trust (console, edit, mod). the audit gives the player a red rebel — a real,
-// usable melee — but strips the gold cosmetic + sheen.
+// each scan fetches the relay's authoritative list of registered pickIds via /leaderboard,
+// then walks the target inventory(ies). any golden pick whose id ISN'T on the relay gets
+// its template rewritten to red rebel + the profile is saved. local PickMetadataStore is
+// NOT consulted — it only knows about picks THIS player received via grant/unpack, so
+// looted-from-bot picks would never appear there. relay knows every legit pick across
+// all players → catches looted / spawned / console-given counterfeits regardless of origin.
 //
-// DEFENSIVE GUARD: refuses to run if PickMetadataStore.Count == 0. zero records means
-// either a brand-new install (nothing to audit) OR a wiped/corrupted metadata file —
-// running the audit in the latter case would transform EVERY real pick into red rebel.
-// log loudly and skip on zero.
+// DEFENSIVE GUARD: if the relay request fails OR returns 0 picks, the scan SKIPS the
+// transform pass. treating "no data" as "all counterfeit" would red-rebel legit picks
+// during a relay outage or DB wipe.
 [Injectable]
 public class CounterfeitPickAudit(
     ISptLogger<CounterfeitPickAudit> logger,
     SaveServer saveServer,
-    PickMetadataStore metaStore
+    GoldenPickRelayClient relayClient
 ) : IOnLoad
 {
     private const string GoldenPickTpl = "6a371980784a6d8a3ec033ed";
@@ -35,15 +34,32 @@ public class CounterfeitPickAudit(
 
     public async Task OnLoad()
     {
+        // boot pass — scan every loaded profile once
+        await RunScan(sessionIdFilter: null, reason: "boot");
+    }
+
+    // public hook called by SurvivedRaidCrateService.EndLocalRaid — scans ONE profile,
+    // not all. fire-and-forget on the caller side; this method swallows its own errors.
+    public Task ScanProfile(MongoId sessionId) =>
+        RunScan(sessionIdFilter: sessionId.ToString(), reason: "raid-end");
+
+    private async Task RunScan(string? sessionIdFilter, string reason)
+    {
         try
         {
-            var metaCount = metaStore.Count;
-            if (metaCount == 0)
+            var validIds = await relayClient.GetRegisteredPickIds();
+            if (validIds == null)
             {
-                logger.Warning("[GoldenPick/Audit] PickMetadataStore has 0 records — SKIPPING counterfeit "
-                             + "scan. either fresh install (fine) OR metadata file got wiped/corrupted "
-                             + "(running the audit would red-rebel EVERY legit pick). investigate "
-                             + "user/mods/GoldenPickServer/data/pick_metadata.json if you expected entries.");
+                if (reason == "boot")
+                    logger.Warning("[GoldenPick/Audit] relay /leaderboard unreachable — SKIPPING scan to "
+                                 + "avoid red-rebel'ing legit picks during a network outage.");
+                return;
+            }
+            if (validIds.Count == 0)
+            {
+                if (reason == "boot")
+                    logger.Warning("[GoldenPick/Audit] relay returned 0 registered picks — SKIPPING scan. "
+                                 + "fresh install (fine) OR relay DB wiped (would red-rebel every legit pick).");
                 return;
             }
 
@@ -52,36 +68,34 @@ public class CounterfeitPickAudit(
 
             foreach (var (sessionId, profile) in profiles)
             {
+                if (sessionIdFilter != null && sessionId.ToString() != sessionIdFilter) continue;
                 profilesScanned++;
                 bool changed = false;
 
-                changed |= ScanInventory(profile.CharacterData?.PmcData?.Inventory?.Items, sessionId, "pmc",
+                changed |= ScanInventory(profile.CharacterData?.PmcData?.Inventory?.Items, validIds, sessionId, "pmc",
                                          ref picksTransformed, ref picksKept);
-                changed |= ScanInventory(profile.CharacterData?.ScavData?.Inventory?.Items, sessionId, "scav",
+                changed |= ScanInventory(profile.CharacterData?.ScavData?.Inventory?.Items, validIds, sessionId, "scav",
                                          ref picksTransformed, ref picksKept);
 
                 if (changed)
                 {
-                    await saveServer.SaveProfileAsync(sessionId);
+                    _ = saveServer.SaveProfileAsync(sessionId);
                     logger.Info($"[GoldenPick/Audit] profile {sessionId} saved after transformation");
                 }
             }
 
-            logger.Info($"[GoldenPick/Audit] scan complete: {profilesScanned} profiles, "
-                      + $"{picksKept} legit picks kept, {picksTransformed} counterfeits red-rebel'd. "
-                      + $"metadata records: {metaCount}");
+            if (reason == "boot" || picksTransformed > 0)
+                logger.Info($"[GoldenPick/Audit] {reason} scan: {profilesScanned} profile(s), "
+                          + $"{picksKept} legit kept, {picksTransformed} counterfeits red-rebel'd "
+                          + $"(relay registered: {validIds.Count})");
         }
         catch (Exception e)
         {
-            // never let an audit failure block server startup — log + move on
-            logger.Error($"[GoldenPick/Audit] scan failed (server startup continues): {e}");
+            logger.Error($"[GoldenPick/Audit] {reason} scan failed: {e}");
         }
     }
 
-    // walks an inventory items list (flat — EFT inventories are flat with parent/slot
-    // references for hierarchy). returns true if any item was mutated, so the caller
-    // knows to persist the profile.
-    private bool ScanInventory(List<Item>? items, string sessionId, string label,
+    private bool ScanInventory(List<Item>? items, HashSet<string> validIds, MongoId sessionId, string label,
                                ref int transformedCount, ref int keptCount)
     {
         if (items == null || items.Count == 0) return false;
@@ -91,12 +105,11 @@ public class CounterfeitPickAudit(
         {
             if (item.Template != GoldenPickTpl) continue;
 
-            var meta = metaStore.TryGet(item.Id);
-            if (meta != null) { keptCount++; continue; }
+            if (validIds.Contains(item.Id)) { keptCount++; continue; }
 
             // counterfeit — rewrite the template. keep the same Id so any inventory
             // references (parent/slot pointers) stay intact.
-            logger.Warning($"[GoldenPick/Audit] {sessionId}/{label}: counterfeit pick id={item.Id} → red rebel");
+            logger.Warning($"[GoldenPick/Audit] {sessionId}/{label}: counterfeit pick id={item.Id} (not on relay) → red rebel");
             item.Template = RedRebelTpl;
             transformedCount++;
             changed = true;

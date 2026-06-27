@@ -103,6 +103,14 @@
       ✏️ Update Pick (by password)
     </button>
 
+    <h1 style="font-size:14px; margin:18px 0 6px;">🗑️ Wipe Pick (by pickId)</h1>
+    <p style="font-size:11px; color:#9aa0a6; margin:0 0 8px;">Permanently removes a pick by id. Blacklists the id so backfill can't resurrect it. If the wiped pick had a password, clears that password from any sibling dupes too. Grab the pickId from the leaderboard (grey text under each name).</p>
+    <label>Pick ID</label>
+    <input id="wipe-pick-id" placeholder="e.g. 481eb3de82065827b5def5b" />
+    <button class="fire" id="wipe-pick" style="margin-top:10px; background: linear-gradient(180deg, #ff7575, #b03030); color:#0e1014;">
+      🗑️ Wipe Pick
+    </button>
+
     <div class="status"><span class="dot" id="dot"></span><span id="state">disconnected</span></div>
     <div class="log" id="log"></div>
   </div>
@@ -188,7 +196,7 @@
       const adminKey = $('adminKey').value.trim();
       if (adminKey) params.push('adminKey=' + encodeURIComponent(adminKey));
     }
-    if (params.length) httpUrl += '?' + params.join('&');
+    if (params.length) httpUrl += (httpUrl.includes('?') ? '&' : '?') + params.join('&');
     return httpUrl;
   }
 
@@ -271,6 +279,24 @@
       log(resp.ok ? `UPDATE ← ${respBody}` : `UPDATE FAILED (${resp.status}): ${respBody}`);
     } catch (e) {
       log('UPDATE error: ' + e.message);
+    }
+  });
+
+  // wipe a specific pick by id — deletes the row, blacklists the id (so backfill cant
+  // resurrect it), and if the pick had a password, scrubs the password from any sibling
+  // dupes so they cant be redeemed. confirm before sending — there's no undo.
+  $('wipe-pick').addEventListener('click', async () => {
+    const pid = $('wipe-pick-id').value.trim();
+    if (!pid) { log('enter a pickId first'); return; }
+    if (!confirm(`Permanently wipe pickId ${pid}? This cannot be undone (the id is blacklisted).`)) return;
+    const httpUrl = buildHttpUrl(`admin/wipe-pick?pickId=${encodeURIComponent(pid)}`, true);
+    if (!httpUrl) { log('enter a relay URL first'); return; }
+    try {
+      const resp = await fetch(httpUrl, { method: 'POST' });
+      const respBody = await resp.text();
+      log(resp.ok ? `WIPE ← ${respBody}` : `WIPE FAILED (${resp.status}): ${respBody}`);
+    } catch (e) {
+      log('WIPE error: ' + e.message);
     }
   });
 
