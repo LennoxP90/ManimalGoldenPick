@@ -7,6 +7,9 @@
       "BackgroundColor": "yellow",
       "RarityPvE": "Superrare",
       "ExaminedByDefault": false,
+	  "Unlootable": true,
+	  "UnlootableFromSlot": "Scabbard",
+	  "UnlootableFromSide": ["Bear", "Usec", "Savage"],
       "Prefab": {
         "path": "manimal/goldenaxe_container.bundle",
         "rcid": ""
@@ -19,8 +22,8 @@
         "description": "Imbued with an ancient power."
       }
     },
-    "fleaPriceRoubles": 2000000000,
-    "handbookPriceRoubles": 2000000000,
+    "fleaPriceRoubles": 200000000,
+    "handbookPriceRoubles": 200000000,
     "addtoBots": false,
     "addtoItemBlacklist": true,
     "addtoStaticLootContainers": false,
