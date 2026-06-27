@@ -96,13 +96,14 @@ namespace Manimal.GoldenPick.GoldenPickSheen.Patches
                     }
                 }
 
-                // color resolution — admin-granted custom picks override the deterministic
-                // hash via PickMetadataLookup. for stash picks not currently equipped, the
-                // PreviewCameraItemId lookup uses the raw item id so OnPreRender finds the
-                // right preview-scoped instance.
-                Color color;
+                // counterfeit gate — only relay-registered picks get sheen in the preview
+                // window. unregistered picks (console-spawn, bot-loot before audit transforms
+                // them) just render as plain golden picks here.
                 var meta = PickMetadataLookup.GetOrNull(item.Id);
-                if (meta != null && PickMetadataLookup.TryParseHexColor(meta.SheenColorHex, out var customColor))
+                if (meta == null) return;
+
+                Color color;
+                if (PickMetadataLookup.TryParseHexColor(meta.SheenColorHex, out var customColor))
                     color = customColor;
                 else
                     color = SheenColors.ForItemId(item.Id);

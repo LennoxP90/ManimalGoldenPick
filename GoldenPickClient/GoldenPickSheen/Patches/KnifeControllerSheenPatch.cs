@@ -123,9 +123,18 @@ namespace Manimal.GoldenPick.GoldenPickSheen.Patches
                 // per id. resolving to the player's Scabbard slot's pick id stays stable.
                 var stableId = StablePickIdResolver.Resolve(item.Id);
 
-                Color color;
+                // counterfeit gate — only picks the relay knows about get sheen. unregistered
+                // (console-spawn, bot-loot, etc.) get no visual treatment until the next raid-end
+                // audit transforms them to red rebel.
                 var meta = PickMetadataLookup.GetOrNull(stableId);
-                if (meta != null && PickMetadataLookup.TryParseHexColor(meta.SheenColorHex, out var customColor))
+                if (meta == null)
+                {
+                    Plugin.LogSource?.LogInfo($"[GoldenPick/Sheen] skipping sheen for unregistered pick id={item.Id}");
+                    return;
+                }
+
+                Color color;
+                if (PickMetadataLookup.TryParseHexColor(meta.SheenColorHex, out var customColor))
                     color = customColor;
                 else
                     color = SheenColors.ForItemId(stableId);

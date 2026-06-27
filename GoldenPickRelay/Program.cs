@@ -172,6 +172,11 @@ app.Map("/ws", async context =>
                 continue;
             }
 
+            // sniff the Player field — every legitimate event the client sends carries it.
+            // best-effort regex parse; failure just leaves the nickname null on this conn.
+            var m = System.Text.RegularExpressions.Regex.Match(msg, "\"Player\"\\s*:\\s*\"([^\"]+)\"");
+            if (m.Success) conn.Nickname = m.Groups[1].Value;
+
             await Broadcast(msg, conn.Id);
         }
     }
@@ -511,6 +516,25 @@ app.MapPost("/pick/register-crate-derived", async (RegisterCrateDerivedRequest r
 // crates and raid counters. PRESERVES custom picks (any row with a sheen color, name,
 // description, or password). dev-only, admin-key gated, requires ?confirm=yes so a stray
 // curl can't accidentally clear test data.
+// who's currently connected via WebSocket — nicknames only, sniffed from the Player field
+// of any inbound message. silent connections (just listening, never sending) show up as
+// null nickname. admin-key gated since it leaks player activity.
+app.MapGet("/admin/connected", (HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
+    var now = DateTime.UtcNow;
+    var snapshot = clients.Values
+        .Select(c => new
+        {
+            nickname    = c.Nickname,                              // null until they send a message with Player
+            connectedAt = c.ConnectedAt.ToString("o"),              // ISO-8601 UTC
+            connectedSecondsAgo = (int)(now - c.ConnectedAt).TotalSeconds
+        })
+        .OrderByDescending(c => c.connectedSecondsAgo)
+        .ToList();
+    return Results.Ok(new { ok = true, count = snapshot.Count, connections = snapshot });
+});
+
 // surgical wipe — delete one specific pick by id AND blacklist the id so future
 // re-registrations (e.g. the owner's SPT-side LeaderboardBackfillOnLoad after a server
 // restart) are refused. unlike /admin/reset (bulk crate-derived cleanup), this targets
@@ -791,5 +815,9 @@ sealed class ClientConn
     public WebSocket Socket { get; }
     public SemaphoreSlim SendLock { get; } = new(1, 1);
     public DateTime LastAccepted { get; set; } = DateTime.MinValue;
+    public DateTime ConnectedAt { get; } = DateTime.UtcNow;
+    // last-known player nickname observed in any inbound message from this socket. null
+    // until the client sends its first identifying event. used by /admin/connected.
+    public string? Nickname { get; set; }
     public ClientConn(WebSocket socket) => Socket = socket;
 }

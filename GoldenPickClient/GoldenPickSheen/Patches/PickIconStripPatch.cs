@@ -30,19 +30,19 @@ namespace Manimal.GoldenPick.GoldenPickSheen.Patches
                 var stripGo = __instance.transform.Find(StripGoName)?.gameObject;
 
                 // EFT pools ItemView instances — the same view gets recycled to display
-                // different items. if this update is for a non-pick item we have to hide
-                // the strip explicitly, otherwise it lingers on whatever the view shows next.
-                if (!isOurPick)
+                // different items. if this update is for a non-pick item OR a counterfeit
+                // pick (not on the relay), hide the strip explicitly so it doesn't linger
+                // from a prior render.
+                var meta = isOurPick ? PickMetadataLookup.GetOrNull(item.Id) : null;
+                if (!isOurPick || meta == null)
                 {
                     if (stripGo != null) stripGo.SetActive(false);
                     return;
                 }
 
-                // resolve color — custom first, deterministic hash fallback. always have a
-                // value here since every pick gets a strip.
+                // color — authored first, deterministic hash fallback for crate-derived
                 Color stripColor;
-                var meta = PickMetadataLookup.GetOrNull(item.Id);
-                if (meta != null && PickMetadataLookup.TryParseHexColor(meta.SheenColorHex, out var custom))
+                if (PickMetadataLookup.TryParseHexColor(meta.SheenColorHex, out var custom))
                     stripColor = custom;
                 else
                     stripColor = SheenColors.ForItemId(item.Id);

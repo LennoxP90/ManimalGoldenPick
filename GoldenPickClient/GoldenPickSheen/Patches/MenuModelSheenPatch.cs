@@ -52,10 +52,15 @@ namespace Manimal.GoldenPick.GoldenPickSheen.Patches
                 // the player's profile so the menu color matches the in-raid color (which
                 // uses the stable inventory id).
                 var stableId = StablePickIdResolver.Resolve(weapon.Id);
+
+                // counterfeit gate — only relay-registered picks get sheen. unregistered
+                // ones render as plain golden picks until the next raid-end audit catches them.
+                var meta = PickMetadataLookup.GetOrNull(stableId);
+                if (meta == null) return;
+
                 // authored sheen color wins over the deterministic hash (admin-granted picks)
                 UnityEngine.Color color;
-                var meta = PickMetadataLookup.GetOrNull(stableId);
-                if (meta != null && PickMetadataLookup.TryParseHexColor(meta.SheenColorHex, out var customColor))
+                if (PickMetadataLookup.TryParseHexColor(meta.SheenColorHex, out var customColor))
                     color = customColor;
                 else
                     color = SheenColors.ForItemId(stableId);
