@@ -59,6 +59,12 @@ const double DropProbability = 0.0051;  // 0.51% — roll once every 5th survive
 const double MinRaidEndIntervalSeconds = 30.0;
 var lastRaidEndAt = new ConcurrentDictionary<string, DateTime>();
 
+// admin-set one-shot drop-probability overrides, keyed by nickname (case-insensitive).
+// when present, the next cycle roll for that nickname uses the override instead of
+// DropProbability and the entry is REMOVED — single use per set. lost across relay
+// restarts (in-memory only) which is fine: admin re-sets if needed.
+var dropBoosts = new ConcurrentDictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
 // global fixed-window message-rate counter
 var rateLock = new object();
 long windowStartTicks = 0;
@@ -263,11 +269,15 @@ app.MapPost("/raid/end", async (RaidEndRequest req, HttpContext ctx) =>
         // cycle boundary check + roll
         if (newCount % RaidCycleSize == 0)
         {
+            // consume any one-shot admin boost for this nickname BEFORE rolling. TryRemove
+            // returns false if no boost set → fall back to the base DropProbability.
+            var probability = dropBoosts.TryRemove(req.Nickname, out var boost) ? boost : DropProbability;
             var roll = Random.Shared.NextDouble();
-            app.Logger.LogInformation("[raid/end] profile={pid} nickname={nick} count={n} (cycle hit) — rolled {r:F5}, need < {p:F5}",
-                req.ProfileId, req.Nickname, newCount, roll, DropProbability);
+            app.Logger.LogInformation("[raid/end] profile={pid} nickname={nick} count={n} (cycle hit) — rolled {r:F5}, need < {p:F5}{boost}",
+                req.ProfileId, req.Nickname, newCount, roll, probability,
+                probability != DropProbability ? $" (BOOSTED from base {DropProbability:F5})" : "");
 
-            if (roll < DropProbability)
+            if (roll < probability)
             {
                 var crateId = MintMongoId();
                 var awardedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -516,6 +526,46 @@ app.MapPost("/pick/register-crate-derived", async (RegisterCrateDerivedRequest r
 // crates and raid counters. PRESERVES custom picks (any row with a sheen color, name,
 // description, or password). dev-only, admin-key gated, requires ?confirm=yes so a stray
 // curl can't accidentally clear test data.
+// set a one-shot drop-probability override for a nickname's NEXT cycle roll. consumed
+// on use — after that nickname triggers a cycle-5 raid (whether they win the roll or not),
+// the override is removed and they go back to the base DropProbability. survives until
+// consumed OR relay restart (in-memory).
+app.MapPost("/admin/boost", (HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
+    var nick = ctx.Request.Query["nickname"].ToString();
+    if (string.IsNullOrWhiteSpace(nick))
+        return Results.BadRequest(new { error = "add ?nickname=... to target a player" });
+    if (!double.TryParse(ctx.Request.Query["chance"].ToString(),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var chance)
+        || chance < 0 || chance > 1)
+        return Results.BadRequest(new { error = "add ?chance=0.0..1.0 (e.g. 1.0 for guaranteed)" });
+
+    dropBoosts[nick] = chance;
+    app.Logger.LogWarning("[admin/boost] nickname={n} chance={c:F4} (consumes on next cycle roll)", nick, chance);
+    return Results.Ok(new { ok = true, nickname = nick, chance, consumesOnNextCycle = true });
+});
+
+// list every pending one-shot boost. admin-key gated since it leaks player names.
+app.MapGet("/admin/boosts", (HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
+    var snapshot = dropBoosts.Select(kvp => new { nickname = kvp.Key, chance = kvp.Value }).ToList();
+    return Results.Ok(new { ok = true, count = snapshot.Count, boosts = snapshot });
+});
+
+// cancel a pending boost without consuming it on a roll.
+app.MapDelete("/admin/boost", (HttpContext ctx) =>
+{
+    if (!IsAdmin(ctx)) return Results.Unauthorized();
+    var nick = ctx.Request.Query["nickname"].ToString();
+    if (string.IsNullOrWhiteSpace(nick))
+        return Results.BadRequest(new { error = "add ?nickname=... to clear" });
+    var removed = dropBoosts.TryRemove(nick, out _);
+    return Results.Ok(new { ok = true, removed });
+});
+
 // who's currently connected via WebSocket — nicknames only, sniffed from the Player field
 // of any inbound message. silent connections (just listening, never sending) show up as
 // null nickname. admin-key gated since it leaks player activity.
