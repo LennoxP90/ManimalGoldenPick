@@ -8,7 +8,7 @@
       - the release zip filename (Manimal-GoldenPick-X.Y.Z.zip)
   -->
   <PropertyGroup>
-    <ModVersion>1.0.5</ModVersion>
+    <ModVersion>1.0.6</ModVersion>
     <ModUsername>Manimal</ModUsername>
     <ModDisplayName>GoldenPick</ModDisplayName>
     <Version>$(ModVersion)</Version>

@@ -44,6 +44,20 @@ var adminKey = Environment.GetEnvironmentVariable("GOLDENPAN_ADMIN_KEY");
 bool IsAdmin(HttpContext ctx) =>
     !string.IsNullOrEmpty(adminKey) && ctx.Request.Query["adminKey"].ToString() == adminKey;
 
+// backfills nickname onto any WS connection from the same IP as the incoming HTTP POST.
+// raid-end / grant-pick / etc. all carry nickname in their body — we'd otherwise have to
+// wait for the player to unpack a crate (the only inbound WS event they ever send) for the
+// /admin/connected view to identify them. matching by IP is good enough for SPT, where each
+// install runs from a unique residential IP; CGNAT/shared-IP edge cases would conflate.
+void TryAttachNicknameByIp(HttpContext ctx, string nickname)
+{
+    if (string.IsNullOrWhiteSpace(nickname)) return;
+    var ip = ResolveIp(ctx);
+    if (string.IsNullOrEmpty(ip)) return;
+    foreach (var c in clients.Values)
+        if (c.RemoteIp == ip) c.Nickname = nickname;
+}
+
 // --- limits (the actual abuse mitigation) ---
 const double MinSendIntervalSeconds = 2.0; // per-connection: 1 event / 2s
 const int MaxMessageBytes = 1024;          // earn events are tiny
@@ -131,7 +145,7 @@ app.Map("/ws", async context =>
     }
 
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
-    var conn = new ClientConn(socket);
+    var conn = new ClientConn(socket) { RemoteIp = ip };
     clients[conn.Id] = conn;
     Console.WriteLine($"[+] {conn.Id} ip={ip} connected ({clients.Count} total)");
 
@@ -172,16 +186,17 @@ app.Map("/ws", async context =>
             // the relay; real pick_earned events are generated SERVER-SIDE inside the
             // grant/redeem/register-crate-derived endpoints (where there's actual signed
             // state behind the claim). this catches old clients too — no client update needed.
+            // sniff the Player field FIRST so even dropped events identify the connection
+            // (we still trust the nickname for "who's online" purposes — the spoof concern is
+            // about FAKING SOMEONE ELSE's pick_earned, not about lying about your own name).
+            var m = System.Text.RegularExpressions.Regex.Match(msg, "\"Player\"\\s*:\\s*\"([^\"]+)\"");
+            if (m.Success) conn.Nickname = m.Groups[1].Value;
+
             if (msg.Contains("\"pick_earned\"") || msg.Contains("\"Type\":\"pick_earned\""))
             {
                 app.Logger.LogWarning("[ws] dropped client-sent pick_earned from {ip} (spoofing attempt or legacy client broadcast)", ip);
                 continue;
             }
-
-            // sniff the Player field — every legitimate event the client sends carries it.
-            // best-effort regex parse; failure just leaves the nickname null on this conn.
-            var m = System.Text.RegularExpressions.Regex.Match(msg, "\"Player\"\\s*:\\s*\"([^\"]+)\"");
-            if (m.Success) conn.Nickname = m.Groups[1].Value;
 
             await Broadcast(msg, conn.Id);
         }
@@ -245,6 +260,8 @@ app.MapPost("/raid/end", async (RaidEndRequest req, HttpContext ctx) =>
 {
     if (!string.IsNullOrEmpty(apiKey) && ctx.Request.Query["key"].ToString() != apiKey)
         return Results.Unauthorized();
+
+    TryAttachNicknameByIp(ctx, req.Nickname);
 
     if (string.IsNullOrWhiteSpace(req.ProfileId) || string.IsNullOrWhiteSpace(req.Nickname))
         return Results.BadRequest(new { error = "profileId and nickname required" });
@@ -442,11 +459,13 @@ app.MapPost("/admin/update-pick", async (AdminUpdatePickRequest req, HttpContext
 // authority is the password alone — nickname can change across profile resets and the pick
 // still flows to whoever has the password. NO api-key gate on this endpoint: it's player-
 // facing and the password itself is the access credential.
-app.MapPost("/pick/redeem", async (RedeemRequest req) =>
+app.MapPost("/pick/redeem", async (RedeemRequest req, HttpContext ctx) =>
 {
     if (string.IsNullOrWhiteSpace(req.Password) || string.IsNullOrWhiteSpace(req.CurrentNickname)
         || string.IsNullOrWhiteSpace(req.CurrentProfileId))
         return Results.BadRequest(new { error = "password, currentNickname and currentProfileId required" });
+
+    TryAttachNicknameByIp(ctx, req.CurrentNickname);
 
     string passwordHash;
     using (var sha = System.Security.Cryptography.SHA256.Create())
@@ -505,6 +524,7 @@ app.MapPost("/pick/register-crate-derived", async (RegisterCrateDerivedRequest r
 {
     if (!string.IsNullOrEmpty(apiKey) && ctx.Request.Query["key"].ToString() != apiKey)
         return Results.Unauthorized();
+    TryAttachNicknameByIp(ctx, req.OwnerNickname);
     if (string.IsNullOrWhiteSpace(req.PickId) || string.IsNullOrWhiteSpace(req.OwnerNickname)
         || string.IsNullOrWhiteSpace(req.Signature))
         return Results.BadRequest(new { error = "pickId, ownerNickname, signature required" });
@@ -664,11 +684,13 @@ app.MapPost("/pick/update-owner-profile", (UpdateOwnerProfileRequest req, HttpCo
 // players inflate ONLY their own picks (annoying but bounded — not a vector for griefing
 // other players' stats). public route, no admin key — picks come from authenticated raid
 // activity that already went through the signed-grant pipeline upstream.
-app.MapPost("/pick/kill", (PickKillRequest req) =>
+app.MapPost("/pick/kill", (PickKillRequest req, HttpContext ctx) =>
 {
     if (string.IsNullOrWhiteSpace(req.PickId) || string.IsNullOrWhiteSpace(req.KillerProfileId)
         || string.IsNullOrWhiteSpace(req.KillerNickname))
         return Results.BadRequest(new { error = "pickId, killerProfileId, killerNickname required" });
+
+    TryAttachNicknameByIp(ctx, req.KillerNickname);
 
     // RecordKillIfOwner verifies by profileId, falls back to nickname for legacy rows.
     // on match it ALSO writes the killer's current nickname back so renames propagate.
@@ -866,8 +888,11 @@ sealed class ClientConn
     public SemaphoreSlim SendLock { get; } = new(1, 1);
     public DateTime LastAccepted { get; set; } = DateTime.MinValue;
     public DateTime ConnectedAt { get; } = DateTime.UtcNow;
-    // last-known player nickname observed in any inbound message from this socket. null
-    // until the client sends its first identifying event. used by /admin/connected.
+    // last-known player nickname. populated from inbound WS messages (Player field) AND
+    // backfilled from HTTP endpoints (raid-end, grant-pick, etc.) via IP matching.
     public string? Nickname { get; set; }
+    // remote IP captured at connect-time. INTERNAL ONLY — never returned in API responses.
+    // used solely to correlate HTTP POSTs (which carry nickname in body) back to a WS conn.
+    public string? RemoteIp { get; set; }
     public ClientConn(WebSocket socket) => Socket = socket;
 }

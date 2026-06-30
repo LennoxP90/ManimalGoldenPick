@@ -121,6 +121,11 @@ namespace Manimal.GoldenPick
             // mutated during the raid. fires at GameWorld.Dispose, before EFT recycles the
             // pooled prefabs for the menu char / next raid's bots.
             SafeEnable("GameWorldDisposeRestorePatch", () => new Statue.GameWorldDisposeRestorePatch().Enable());
+            // red-rebel extract bypass — a registered golden pick satisfies the red rebel
+            // item requirement AND lifts the armor-size restriction on the same extract
+            SafeEnable("RedRebelHasItemBypassPatch",     () => new Extract.RedRebelHasItemBypassPatch().Enable());
+            SafeEnable("RedRebelEmptyOrSizeBypassPatch", () => new Extract.RedRebelEmptyOrSizeBypassPatch().Enable());
+            SafeEnable("RedRebelEmptyBypassPatch",       () => new Extract.RedRebelEmptyBypassPatch().Enable());
         }
 
         // wrapper so one bad patch logs + moves on instead of taking down the whole Awake
