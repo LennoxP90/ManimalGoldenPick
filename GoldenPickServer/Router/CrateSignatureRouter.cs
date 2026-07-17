@@ -14,7 +14,7 @@ namespace GoldenPick.Router;
 // to the player at award time. there's nothing here a determined cheater couldn't read out of
 // the JSON file directly.
 [Injectable]
-public class CrateSignatureRouter(JsonUtil jsonUtil, CrateSignatureStore store)
+public class CrateSignatureRouter(JsonUtil jsonUtil, CrateRecordStore store)
     : StaticRouter(
         jsonUtil,
         [
@@ -27,9 +27,7 @@ public class CrateSignatureRouter(JsonUtil jsonUtil, CrateSignatureStore store)
                     var payload = JsonSerializer.Serialize(new
                     {
                         found = true,
-                        signature = rec.Signature,
-                        awardedAt = rec.AwardedAt,
-                        profileId = rec.ProfileId,
+                        pickNumber = rec.PickNumber,
                     });
                     return new ValueTask<string>(payload);
                 }

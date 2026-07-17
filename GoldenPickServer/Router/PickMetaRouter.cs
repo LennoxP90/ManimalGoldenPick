@@ -24,7 +24,6 @@ public class PickMetaRouter(JsonUtil jsonUtil, PickMetadataStore store)
                         found             = true,
                         ownerNickname     = r.OwnerNickname,
                         awardedAt         = r.AwardedAt,
-                        signature         = r.Signature,
                         sheenColorHex     = r.SheenColorHex,
                         customName        = r.CustomName,
                         customDescription = r.CustomDescription,

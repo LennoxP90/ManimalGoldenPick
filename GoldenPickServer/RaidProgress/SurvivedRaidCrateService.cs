@@ -43,9 +43,8 @@ namespace GoldenPick.RaidProgress;
 public class SurvivedRaidCrateService(
     // --- our own deps ---
     SPTarkov.Server.Core.Models.Utils.ISptLogger<SurvivedRaidCrateService> ourLogger,
-    GoldenPickRelayClient relayClient,
-    CrateSignatureStore signatureStore,
-    Audit.CounterfeitPickAudit counterfeitAudit,
+    RaidCounterStore raidCounters,
+    CrateRecordStore crateStore,
     MailSendService mailSendService,
     ItemHelper itemHelper,
     // --- base service deps, passed straight through ---
@@ -94,75 +93,63 @@ public class SurvivedRaidCrateService(
         // inventory, which is exactly what we want the audit to see.
         base.EndLocalRaid(sessionId, request);
 
-        // fire-and-forget the relay notification. await it inside so any exception cant crash
+        // fire-and-forget the local roll. await it inside so any exception cant crash
         // the SPT raid-end flow, but DON'T let the async work block the caller.
-        _ = NotifyRelayAndMaybeMail(sessionId, request);
-
-        // counterfeit sweep on the freshly-populated profile — catches picks looted off bots
-        // by other mods, console-spawns since the previous scan, etc. fire-and-forget; audit
-        // swallows its own errors. relay /leaderboard is the source of truth.
-        _ = counterfeitAudit.ScanProfile(sessionId);
+        _ = RollAndMaybeMail(sessionId, request);
     }
 
-    private async Task NotifyRelayAndMaybeMail(MongoId sessionId, EndLocalRaidRequestData request)
+    private async Task RollAndMaybeMail(MongoId sessionId, EndLocalRaidRequestData request)
     {
+        await Task.Yield(); // keep the async signature; work below is synchronous + cheap
         try
         {
-            var survived = request.Results?.Result == ExitStatus.SURVIVED;
-            // SPT 4.0 uses ExitStatus.RUNNER as the runthrough indicator (per decompile research).
-            // SURVIVED is the full-credit exit — RUNNER and SURVIVED appear to be mutually
-            // exclusive in practice, but we send both flags so the relay can be authoritative
-            // about its own gating.
+            var survived   = request.Results?.Result == ExitStatus.SURVIVED;
             var runthrough = request.Results?.Result == ExitStatus.RUNNER;
+            if (!survived || runthrough) return;
 
-            // nickname from the saved profile so the relay can attribute the award without us
-            // having to send identifying info beyond what SPT already has on disk.
             var pmc = profileHelper.GetPmcProfile(sessionId);
             var nickname = pmc?.Info?.Nickname ?? "An operative";
 
-            // pass the raw ExitStatus along so the relay can include it in the raid_result
-            // broadcast — the debug overlay shows "last: survived / runner / killed / ..." so
-            // the user can see why a counter did or didnt advance.
-            var lastResult = request.Results?.Result?.ToString().ToLowerInvariant() ?? "unknown";
+            var newCount = raidCounters.IncrementSurvived(sessionId.ToString(), nickname);
+            ourLogger.Info($"[GoldenPick] survived raid — count={newCount}");
 
-            var resp = await relayClient.NotifyRaidEnd(sessionId.ToString(), nickname, survived, runthrough, lastResult);
-            if (resp == null) return;  // network error, already logged
+            if (!DropOracle.ShouldAward(newCount, () => Random.Shared.NextDouble())) return;
 
-            ourLogger.Info($"[GoldenPick] relay /raid/end → awarded={resp.Awarded} newCount={resp.NewCount}");
-
-            if (!resp.Awarded || resp.Crate == null) return;
-
-            // award! mint the crate using the RELAY's id (not a fresh one — that id is what
-            // the signature is over, the client will verify against this exact value).
-            GrantCrate(sessionId, resp.Crate);
+            // WIN: mint a crate id, assign the next global pick number, record + mail.
+            var crateId   = MintMongoId();
+            var awardedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var pickNumber = crateStore.NextPickNumber();
+            crateStore.Record(crateId, awardedAt, sessionId.ToString(), pickNumber);
+            GrantCrate(sessionId, crateId);
+            ourLogger.Info($"[GoldenPick] AWARD count={newCount} crate={crateId} pick#={pickNumber}");
         }
-        catch (Exception e) { ourLogger.Error($"[GoldenPick] post-raid relay flow failed: {e.Message}"); }
+        catch (Exception e) { ourLogger.Error($"[GoldenPick] post-raid roll failed: {e.Message}"); }
     }
 
-    private void GrantCrate(MongoId sessionId, CrateAward award)
+    // 24-char lowercase hex, EFT MongoId shape
+    private static string MintMongoId()
+    {
+        var bytes = new byte[12];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private void GrantCrate(MongoId sessionId, string crateId)
     {
         try
         {
             var (ok, tpl) = itemHelper.GetItem(CrateTpl);
             if (!ok || tpl == null) { ourLogger.Error($"[GoldenPick] crate tpl '{CrateTpl}' not in db — cant mail"); return; }
 
-            // use the relay's crateId verbatim — that's the value baked into the signature.
-            // anything else and verification will fail on the client.
             var crate = new Item
             {
-                Id = new MongoId(award.CrateId),
+                Id = new MongoId(crateId),
                 Template = tpl.Id,
                 Upd = itemHelper.GenerateUpdForItem(tpl),
             };
             itemHelper.SetFoundInRaid(new List<Item> { crate });
-
-            // persist the signature locally so the BepInEx client can look it up at unpack
-            // time. pick_number rides along so the unpack flow can inherit it into the pick
-            // metadata for tooltip display.
-            signatureStore.Record(award.CrateId, award.Signature, award.AwardedAt, sessionId.ToString(), award.PickNumber);
-
             mailSendService.SendSystemMessageToPlayer(sessionId, MailMessage, new List<Item> { crate });
-            ourLogger.Info($"[GoldenPick] crate mailed to {sessionId} (id={award.CrateId})");
+            ourLogger.Info($"[GoldenPick] crate mailed to {sessionId} (id={crateId})");
         }
         catch (Exception e) { ourLogger.Error($"[GoldenPick] crate grant failed: {e.Message}"); }
     }

@@ -22,11 +22,11 @@ public class PickMetadataStore(ISptLogger<PickMetadataStore> logger)
         string? OwnerProfileId,
         string OwnerNickname,
         long AwardedAt,
-        string Signature,
         string? SheenColorHex,
         string? CustomName,
         string? CustomDescription,
-        int? PickNumber);
+        int? PickNumber,
+        int KillCount = 0);
 
     private readonly string _path = Path.Combine(
         Path.GetDirectoryName(typeof(PickMetadataStore).Assembly.Location)!,
@@ -98,32 +98,64 @@ public class PickMetadataStore(ISptLogger<PickMetadataStore> logger)
         }
     }
 
-    // total record count — used by the counterfeit audit as a sanity-check before running
-    // a destructive transformation pass. zero records means either (a) genuinely no picks
-    // have ever been minted on this install, OR (b) the metadata file got wiped/corrupted.
-    // we cant tell which from inside the server, so the audit refuses to run on zero.
-    public int Count
-    {
-        get { lock (_lock) { return Load().Count; } }
-    }
-
-    // snapshot all records — used by the relay-backfill IOnLoad to push every locally-known
-    // pick into the relay's awarded_picks table on server boot. caller iterates the snapshot
-    // outside the lock so async work doesnt block other reads/writes.
-    public IReadOnlyList<KeyValuePair<string, PickMetadata>> Snapshot()
-    {
-        lock (_lock)
-        {
-            return Load().ToList();
-        }
-    }
-
     public PickMetadata? TryGet(string pickId)
     {
         lock (_lock)
         {
             var map = Load();
             return map.TryGetValue(pickId, out var r) ? r : null;
+        }
+    }
+
+    // owner-gated kill increment. matches on OwnerProfileId when present, falls back to
+    // case-insensitive nickname for legacy rows. on match, refreshes owner identity (rename
+    // propagation) and returns the new kill count; null if the pick is unknown or not owned
+    // by the killer. no rate-limiting — this is a trusted private server.
+    public int? IncrementKill(string pickId, string killerProfileId, string killerNickname)
+    {
+        if (string.IsNullOrEmpty(pickId) || string.IsNullOrEmpty(killerProfileId) || string.IsNullOrEmpty(killerNickname))
+            return null;
+        lock (_lock)
+        {
+            var map = Load();
+            if (!map.TryGetValue(pickId, out var m)) return null;
+
+            bool owns = !string.IsNullOrEmpty(m.OwnerProfileId)
+                ? string.Equals(m.OwnerProfileId, killerProfileId, StringComparison.Ordinal)
+                : string.Equals(m.OwnerNickname, killerNickname, StringComparison.OrdinalIgnoreCase);
+            if (!owns) return null;
+
+            var updated = m with
+            {
+                OwnerProfileId = killerProfileId,
+                OwnerNickname  = killerNickname,
+                KillCount      = m.KillCount + 1,
+            };
+            map[pickId] = updated;
+            Save();
+            return updated.KillCount;
+        }
+    }
+
+    public sealed record LeaderboardEntry(
+        string PickId, string? OwnerProfileId, string OwnerNickname, long AwardedAt,
+        string? SheenColorHex, string? CustomName, string? CustomDescription,
+        int? PickNumber, int KillCount);
+
+    // every registered pick, ordered by kills desc then pick number asc. drives /goldenpick/leaderboard.
+    public List<LeaderboardEntry> GetLeaderboard()
+    {
+        lock (_lock)
+        {
+            return Load()
+                .Select(kv => new LeaderboardEntry(
+                    kv.Key, kv.Value.OwnerProfileId, kv.Value.OwnerNickname, kv.Value.AwardedAt,
+                    kv.Value.SheenColorHex, kv.Value.CustomName, kv.Value.CustomDescription,
+                    kv.Value.PickNumber, kv.Value.KillCount))
+                .OrderByDescending(e => e.KillCount)
+                .ThenBy(e => e.PickNumber ?? int.MaxValue)
+                .ThenBy(e => e.AwardedAt)
+                .ToList();
         }
     }
 }
