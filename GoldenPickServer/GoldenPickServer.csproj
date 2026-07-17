@@ -48,7 +48,7 @@
   -->
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
     <PropertyGroup>
-      <DevModDir>D:\SPTDev\SPT\user\mods\GoldenPickServer</DevModDir>
+      <DevModDir>$(ProjectDir)..\dist\SPT\user\mods\GoldenPickServer</DevModDir>
       <ServerModFilesDir>$(ProjectDir)..\ServerModFiles</ServerModFilesDir>
     </PropertyGroup>
     <ItemGroup>

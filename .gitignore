@@ -9,6 +9,9 @@ obj/
 # Distribution zips emitted by PackageModForDistribution targets
 *.zip
 
+# Repo-local dev-deploy staging tree (server PostBuild DevModDir)
+dist/
+
 # IDE caches
 .vscode/
 *.swp
