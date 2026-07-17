@@ -7,7 +7,7 @@ namespace GoldenPick.RaidProgress;
 // per-profile survived-raid counter. JSON side-channel at <mod-dir>/data/raid_counters.json,
 // keyed by profileId (SPT sessionId). replaces the relay's SQLite profile_raids table — the
 // data volume (a handful of players) doesn't justify a DB, and this matches the existing
-// PickMetadataStore / CrateSignatureStore file-store pattern.
+// PickMetadataStore / CrateRecordStore file-store pattern.
 [Injectable(InjectionType.Singleton)]
 public class RaidCounterStore(ISptLogger<RaidCounterStore> logger)
 {

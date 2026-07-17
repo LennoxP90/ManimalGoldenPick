@@ -15,30 +15,23 @@ using ISptLogger = SPTarkov.Server.Core.Models.Utils.ISptLogger<SPTarkov.Server.
 namespace GoldenPick.RaidProgress;
 
 // hook for "the player completed a raid" — subclass of LocationLifecycleService that overrides
-// EndLocalRaid and notifies the relay AFTER the base implementation saves the raid result.
+// EndLocalRaid and rolls the drop AFTER the base implementation saves the raid result.
 //
-// THE RELAY OWNS EVERYTHING: counter, drop roll, crate signing. this code just relays the raid
-// event upstream and, if the relay says "you won," materializes the awarded crate and mails it
-// with the relay-issued signature stashed in our local CrateSignatureStore (the BepInEx client
-// later queries the store via /goldenpick/cratesig to verify before unpack).
-//
-// why this lives server-side at all (instead of just having the client POST the raid event):
-// the BepInEx client is open source, so anything it does is forgeable. the SPT server isn't
-// directly under the player's control during raid-end (vanilla SPT decides when EndLocalRaid
-// fires based on real raid completion), which makes this a harder seam to fake. it's not
-// IMPOSSIBLE to fake (someone could mod this DLL) but the relay-side 30s cooldown caps how
-// fast even a forked client can spam, and a forked-DLL cheater can't forge the Ed25519
-// signature anyway — so the worst they get is a counter that ticks faster but no real picks.
+// THIS SERVICE OWNS EVERYTHING NOW: counter, drop roll, crate minting. no external relay is
+// consulted — the survived-raid count lives in RaidCounterStore, the roll decision in
+// DropOracle, and the awarded crate's pick number in CrateRecordStore (the BepInEx client
+// later queries that store via /goldenpick/cratesig to confirm the crate was server-minted
+// before unpack).
 //
 // why a subclass and not Harmony: SPT's DI resolves services by TypePriority. a higher-
 // priority subclass of the same base wins resolution — every consumer of LocationLifecycleService
 // transparently uses ours. the 26 base deps are passed straight through; we add our own
-// relay-client + signature-store + mail/item-helper for the grant.
+// counter-store + crate-record-store + mail/item-helper for the grant.
 // TypeOverride is the ACTUAL DI mechanism for replacing a base service — SPT scans for
 // attributes with TypeOverride set and removes the named type from the registration set
 // BEFORE injecting. without this we and the base both registered; consumers (MatchController)
 // ended up resolving the base one and our override never fired, so raid-end never reached
-// the relay. TypePriority alone is just a sort order, not an override directive.
+// this service. TypePriority alone is just a sort order, not an override directive.
 [Injectable(InjectionType.Singleton, typeOverride: typeof(LocationLifecycleService))]
 public class SurvivedRaidCrateService(
     // --- our own deps ---
