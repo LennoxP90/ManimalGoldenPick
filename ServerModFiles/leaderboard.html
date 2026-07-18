@@ -86,25 +86,16 @@
     return PALETTE[((h % n) + n) % n];
   }
 
-  // Points directly at the SPT server (this file no longer lives behind the relay, which
-  // used to proxy same-origin `/leaderboard`). Port 6969 is SPT's default HTTP port; confirm
-  // it matches the actual mapped port on the game server before relying on this in prod.
-  const SERVER = 'http://192.168.30.11:6969';
-
+  // This page is served by the mod's own embedded web server (LeaderboardWebServer), which
+  // also exposes the JSON at `/leaderboard` on the SAME origin — so a plain relative GET works
+  // with no host/port to hardcode and no cross-origin/CORS concern.
   async function load() {
     const dot = document.getElementById('status-dot');
     const txt = document.getElementById('status-text');
     dot.classList.remove('live');
     txt.textContent = 'loading...';
     try {
-      // SPT's HTTP transport doesn't handle plain GETs like a normal web server — routes are
-      // registered as POST handlers, so we POST an empty JSON body instead.
-      const resp = await fetch(`${SERVER}/goldenpick/leaderboard`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-        cache: 'no-store',
-      });
+      const resp = await fetch('/leaderboard', { cache: 'no-store' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       render(data.picks || []);
