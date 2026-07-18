@@ -17,7 +17,17 @@ public class LeaderboardRouter(JsonUtil jsonUtil, PickMetadataStore store)
                 "/goldenpick/leaderboard",
                 (url, info, sessionId, output) =>
                 {
-                    var picks = store.GetLeaderboard();
+                    var picks = store.GetLeaderboard().Select(p => new {
+                        pickId = p.PickId,
+                        ownerProfileId = p.OwnerProfileId,
+                        ownerNickname = p.OwnerNickname,
+                        awardedAt = p.AwardedAt,
+                        sheenColorHex = p.SheenColorHex,
+                        customName = p.CustomName,
+                        customDescription = p.CustomDescription,
+                        pickNumber = p.PickNumber,
+                        killCount = p.KillCount,
+                    });
                     return new ValueTask<string>(JsonSerializer.Serialize(new { ok = true, picks }));
                 }
             ),
