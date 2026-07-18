@@ -45,11 +45,6 @@
 
   <ItemGroup>
     <PackageReference Include="WTT-ClientCommonLib" Version="2.0.20" />
-    <!-- Ed25519 signature verification for counterfeit-crate detection. pure-managed, no
-         native deps — works inside BepInEx without extra runtime requirements. .NET 6+
-         has Ed25519 in System.Security.Cryptography but netstandard2.1 does NOT, so we
-         pull this in. matches the same BouncyCastle version the relay uses for signing. -->
-    <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
   </ItemGroup>
 
   <!--
@@ -159,9 +154,6 @@
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
     <MakeDir Directories="F:\Games\SPT-4.0\BepInEx\plugins\GoldenPick" />
     <Exec Command="copy &quot;$(TargetPath)&quot; &quot;F:\Games\SPT-4.0\BepInEx\plugins\GoldenPick\$(TargetFileName)&quot;" />
-    <!-- runtime dep for CounterfeitDetector — without this the plugin loads but the
-         unpack patch silently throws when it tries to verify a crate signature. -->
-    <Exec Command="copy &quot;$(OutDir)BouncyCastle.Cryptography.dll&quot; &quot;F:\Games\SPT-4.0\BepInEx\plugins\GoldenPick\BouncyCastle.Cryptography.dll&quot;" />
   </Target>
 
 </Project>

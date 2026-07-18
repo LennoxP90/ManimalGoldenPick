@@ -1,7 +1,5 @@
-using System;
 using Comfort.Common;
 using EFT;
-using Manimal.GoldenPick.Net;
 using Manimal.GoldenPick.Notify;
 using SPT.Reflection.Utils;
 
@@ -15,18 +13,7 @@ namespace Manimal.GoldenPick.Earn
         public static void EarnGoldenPick(string source)
         {
             Plugin.LogSource?.LogInfo($"[GoldenPick] EarnGoldenPick fired (source: {source})");
-
             PickNotifier.Show("You just received a Golden Ice Pick!!");
-            ServerMail.Announce("You just received a Golden Ice Pick!");
-
-            if (Plugin.Relay != null)
-            {
-                Plugin.Relay.SendEarn(new EarnEvent
-                {
-                    Player = ResolveLocalNickname(),
-                    Ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                });
-            }
         }
 
         // the player's profile nickname (e.g. "testdev"). PatchConstants.BackEndSession

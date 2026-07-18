@@ -53,17 +53,12 @@ namespace Manimal.GoldenPick.Unbox
             // only our crate gets the show
             if (targetItem.TemplateId.ToString() != GoldenPickConstants.GoldenCrateTpl) return true;
 
-            // counterfeit check — every crate must carry a relay-issued Ed25519 signature
-            // in the local store. spawned crates dont have one + forged ones cant satisfy
-            // the public-key verify. fail closed: any miss → refuse, leave crate in inventory.
-            if (!CounterfeitDetector.IsLegitimate(targetItem.Id))
+            // only crates the server actually minted may unpack (blocks console-spawned crates).
+            if (!CrateRecordCheck.IsServerMinted(targetItem.Id))
             {
-                try { Notify.PickNotifier.Show("Counterfeit Golden Crate — cannot be unpacked. Only crates earned in raid will open."); }
+                try { Notify.PickNotifier.Show("This Golden Crate wasn't earned in raid and cannot be unpacked."); }
                 catch { /* notifier not ready */ }
-                // signal failure back to the caller via a properly-typed IResult so EFTs unpack
-                // UI handles it cleanly. FailedResult(message, errorCode) is what vanilla uses
-                // for "can't do this to item" style refusals.
-                __result = Task.FromResult<IResult>(new FailedResult("Counterfeit Golden Crate — cannot be unpacked.", 0));
+                __result = Task.FromResult<IResult>(new FailedResult("Golden Crate cannot be unpacked.", 0));
                 return false;
             }
 

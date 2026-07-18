@@ -3,8 +3,6 @@ using BepInEx.Configuration;
 using BepInEx.Logging;
 using Manimal.GoldenPick.Earn;
 using Manimal.GoldenPick.GoldenPickSheen.Patches;
-using Manimal.GoldenPick.Net;
-using Manimal.GoldenPick.Notify;
 using Manimal.GoldenPick.Statue;
 
 namespace Manimal.GoldenPick
@@ -17,8 +15,6 @@ namespace Manimal.GoldenPick
     {
         public const string PluginGuid = "com.manimal.goldenpick";
         public const string PluginName = "Manimal-GoldenPick";
-        public const string RelayKey = "7355608";
-        public const string RelayUrl = "wss://goldenpan-relay-manimal.fly.dev/ws";
 
         public static ManualLogSource LogSource;
         // lets static patch contexts (the unbox flow) start coroutines on us
@@ -36,17 +32,6 @@ namespace Manimal.GoldenPick
         public static ConfigEntry<float> PreviewCubePosX, PreviewCubePosY, PreviewCubePosZ;
         public static ConfigEntry<float> PreviewCubeRotX, PreviewCubeRotY, PreviewCubeRotZ;
         public static ConfigEntry<float> PreviewCubeSizeX, PreviewCubeSizeY, PreviewCubeSizeZ;
-
-        // top-right debug overlay that polls the relay's per-profile raid counter via the
-        // SPT server's /goldenpick/raidstate route. shows cycle progress 1..5 + the reward
-        // result on the 5th raid. off by default — its a tuning/dev tool.
-        public static ConfigEntry<bool> RaidCounterOverlayEnabled;
-
-
-        // the live relay link. null when both send + receive are disabled.
-        // internal because RelayClient is internal — a public field cant expose it,
-        // and nothing outside this assembly needs it.
-        internal static RelayClient Relay;
 
         private void Awake()
         {
@@ -76,13 +61,6 @@ namespace Manimal.GoldenPick
             PreviewCubeSizeX = Config.Bind("Sheen Cube (Preview)", "SizeX", 0.25954f, new ConfigDescription("Preview cube size X (projector volume width)",  sizeRange));
             PreviewCubeSizeY = Config.Bind("Sheen Cube (Preview)", "SizeY", 0.51277f, new ConfigDescription("Preview cube size Y (projector volume height)", sizeRange));
             PreviewCubeSizeZ = Config.Bind("Sheen Cube (Preview)", "SizeZ", 0.69708f, new ConfigDescription("Preview cube size Z (projector volume length)", sizeRange));
-
-            RaidCounterOverlayEnabled = Config.Bind("Debug", "RaidCounterOverlay", false,
-                "Top-right overlay showing the relay's survived-raid counter (debug).");
-            gameObject.AddComponent<RaidCounter.RaidCounterOverlay>();
-
-                Relay = new RelayClient(BuildRelayUrl());
-                Relay.Start();
 
             // intercept the Sealed Golden Crate unpack → reveal countdown + smart placement
             new Unbox.GoldenCrateUnpackPatch().Enable();
@@ -138,69 +116,9 @@ namespace Manimal.GoldenPick
             }
         }
 
-        private void Update()
-        {
-            // drain inbound relay events on the main thread so the toast api is happy
-            if (Relay != null )
-            {
-                while (Relay.TryDequeue(out var ev))
-                {
-                    if (ev.Type == "crate_grant")
-                    {
-                        // only act on grants targeting OUR nickname — the broadcast goes to
-                        // everyone connected, the recipient self-selects
-                        var me = GoldenPickEarner.ResolveLocalNickname();
-                        if (!string.Equals(ev.Player, me, System.StringComparison.OrdinalIgnoreCase)) continue;
-                        Net.CrateGrantBridge.ForwardToLocalServer(ev);
-                        continue;
-                    }
-                    if (ev.Type == "raid_result")
-                    {
-                        // push state into the debug overlay. self-select by nickname here too.
-                        var me = GoldenPickEarner.ResolveLocalNickname();
-                        if (!string.Equals(ev.Player, me, System.StringComparison.OrdinalIgnoreCase)) continue;
-                        RaidCounter.RaidCounterOverlay.Notify(ev.NewCount, ev.Awarded, ev.LastResult);
-                        continue;
-                    }
-                    if (ev.Type == "pick_grant")
-                    {
-                        // admin-direct pick grant. same nickname-self-select as crate_grant.
-                        var me = GoldenPickEarner.ResolveLocalNickname();
-                        if (!string.Equals(ev.Player, me, System.StringComparison.OrdinalIgnoreCase)) continue;
-                        Net.PickGrantBridge.ForwardToLocalServer(ev);
-                        continue;
-                    }
-                    if (ev.Type == "pick_metadata_update")
-                    {
-                        // admin re-issue with same password → cosmetics changed on existing pick.
-                        // invalidate the metadata cache + tell SPT server to overwrite its on-disk
-                        // record. nickname-self-select since broadcast goes to all connected clients.
-                        var me = GoldenPickEarner.ResolveLocalNickname();
-                        if (!string.Equals(ev.Player, me, System.StringComparison.OrdinalIgnoreCase)) continue;
-                        Net.PickMetadataUpdateBridge.ForwardToLocalServer(ev);
-                        continue;
-                    }
-                    // default: pick_earned legacy broadcast
-                    var line = $"{ev.Player} just received a Golden Ice Pick!";
-                    PickNotifier.Show(line);          // gold toast + quest-complete sound
-                    Net.ServerMail.Announce(line);   // persistent messenger entry
-                }
-            }
-        }
-
         private void OnDestroy()
         {
-            Relay?.Stop();
             GoldKillHandler.Shutdown();
-        }
-
-        // append the optional shared key as a query param if configured
-        private static string BuildRelayUrl()
-        {
-            var url = RelayUrl;
-            if (!string.IsNullOrEmpty(RelayKey))
-                url += (url.Contains("?") ? "&" : "?") + "key=" + System.Uri.EscapeDataString(RelayKey);
-            return url;
         }
     }
 }
