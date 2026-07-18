@@ -17,8 +17,8 @@ namespace GoldenPick.RaidProgress;
 // hook for "the player completed a raid" — subclass of LocationLifecycleService that overrides
 // EndLocalRaid and rolls the drop AFTER the base implementation saves the raid result.
 //
-// THIS SERVICE OWNS EVERYTHING NOW: counter, drop roll, crate minting. no external relay is
-// consulted — the survived-raid count lives in RaidCounterStore, the roll decision in
+// THIS SERVICE OWNS EVERYTHING: counter, drop roll, crate minting — all local, no external
+// dependency. the survived-raid count lives in RaidCounterStore, the roll decision in
 // DropOracle, and the awarded crate's pick number in CrateRecordStore (the BepInEx client
 // later queries that store via /goldenpick/cratesig to confirm the crate was server-minted
 // before unpack).
@@ -83,7 +83,7 @@ public class SurvivedRaidCrateService(
     {
         // let SPT do all its normal raid-end processing first — quests, insurance, profile save.
         // base finishing writes raid loot (including anything looted off bots) into the profile
-        // inventory, which is exactly what we want the audit to see.
+        // inventory before our own crate-award logic runs.
         base.EndLocalRaid(sessionId, request);
 
         // fire-and-forget the local roll. await it inside so any exception cant crash

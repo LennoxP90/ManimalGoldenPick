@@ -36,10 +36,10 @@ public class GoldenPickServer(
         var assembly = Assembly.GetExecutingAssembly();
         await wttCommon.CustomItemServiceExtended.CreateCustomItems(assembly);
 
-        // patch SPT's ItemExtensions.ReplaceIDs so our golden-crate keeps its relay-signed Id
-        // through the mail flow. without this, MailSendService regenerates ids → the post-mail
-        // crate fails Ed25519 signature verification → counterfeit-detection treats every
-        // legitimately-awarded crate as a fake.
+        // patch SPT's ItemExtensions.ReplaceIDs so our golden-crate/pick keeps its original Id
+        // through the mail flow. without this, MailSendService regenerates ids → the crate's
+        // /goldenpick/cratesig record lookup (keyed by the minted id) misses, and the pick
+        // metadata keyed by that id no longer resolves.
         RaidProgress.PreserveGoldenCrateIdPatch.Apply();
     }
 }

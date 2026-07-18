@@ -62,7 +62,8 @@ namespace Manimal.GoldenPick.GoldenPickSheen
         }
 
         // evict a specific id from the cache so the next GetOrNull re-queries the server.
-        // called from the pick_metadata_update WS handler when admin edits a pick's color/name/etc.
+        // currently only used by the inherit-pickmeta flow to invalidate a pick's cached entry
+        // after its metadata changes.
         public static void Invalidate(string pickId)
         {
             if (string.IsNullOrEmpty(pickId)) return;

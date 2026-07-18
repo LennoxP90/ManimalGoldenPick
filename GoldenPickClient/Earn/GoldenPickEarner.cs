@@ -5,9 +5,9 @@ using SPT.Reflection.Utils;
 
 namespace Manimal.GoldenPick.Earn
 {
-    // single funnel for "a player earned a Golden Ice Pick" — local toast + relay broadcast.
-    // hangs all consequences off one method so the earn condition can be swapped without
-    // touching downstream code.
+    // single funnel for "a player earned a Golden Ice Pick" — local toast. hangs all
+    // consequences off one method so the earn condition can be swapped without touching
+    // downstream code.
     internal static class GoldenPickEarner
     {
         public static void EarnGoldenPick(string source)

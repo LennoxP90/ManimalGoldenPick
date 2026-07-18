@@ -10,8 +10,9 @@ namespace GoldenPick.RaidProgress;
 // Harmony patch on SPT's ItemExtensions.ReplaceIDs to PRESERVE the Item.Id for items whose
 // Template is our golden crate. without this the mail flow (MailSendService → ProcessItems
 // BeforeAddingToMail → ReplaceIDs) regenerates the crate's id when it's delivered to the
-// player's messenger, but the relay's Ed25519 signature is over the ORIGINAL id — so the
-// post-mail crate fails signature verification and the unpack patch flags it as counterfeit.
+// player's messenger, but the server's /goldenpick/cratesig record and the pick metadata are
+// both keyed by the ORIGINAL id — so the post-mail crate's lookup misses and a legitimately-
+// earned crate can't unpack.
 //
 // scoped to our tpl only. every other system that calls ReplaceIDs (loot gen, presets,
 // ragfair, hideout production, scav case, cultist circle — 15+ call sites) still gets fresh
@@ -26,9 +27,9 @@ namespace GoldenPick.RaidProgress;
 public static class PreserveGoldenCrateIdPatch
 {
     // both crate AND pick templates need their ids preserved through mail flows. crates: so
-    // the unpack-time signature verify finds the right cratesig record. picks: so admin-
-    // direct-granted picks land in the player's messenger with the relay-issued id intact
-    // (the metadata in PickMetadataStore is keyed by that id).
+    // the unpack-time cratesig lookup finds the right record. picks: so awarded picks land in
+    // the player's messenger with the originally-minted id intact (the metadata in
+    // PickMetadataStore is keyed by that id).
     private const string GoldenCrateTpl = "9c2f1a0b7e6d4c83a5f10b2e";
     private const string GoldenPickTpl  = "6a371980784a6d8a3ec033ed";
 
@@ -45,7 +46,7 @@ public static class PreserveGoldenCrateIdPatch
         var target = AccessTools.Method(typeof(ItemExtensions), nameof(ItemExtensions.ReplaceIDs));
         if (target == null)
         {
-            Console.WriteLine("[GoldenPick/PreserveId] FAILED to locate ItemExtensions.ReplaceIDs — patch not applied. anti-counterfeit will reject every awarded crate.");
+            Console.WriteLine("[GoldenPick/PreserveId] FAILED to locate ItemExtensions.ReplaceIDs — patch not applied. crate ids will change through mail, so the client's cratesig lookup will miss and legitimately-earned crates won't unpack.");
             return;
         }
         var prefix = AccessTools.Method(typeof(PreserveGoldenCrateIdPatch), nameof(Prefix));

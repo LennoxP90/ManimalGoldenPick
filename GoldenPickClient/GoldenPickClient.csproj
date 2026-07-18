@@ -10,7 +10,7 @@
     <LangVersion>latest</LangVersion>
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
-    <!-- forces transitive NuGet DLLs (BouncyCastle.Cryptography) to land in bin output.
+    <!-- forces transitive NuGet DLLs (e.g. from WTT-ClientCommonLib) to land in bin output.
          without this, PackageReference resolves at compile-time only — the DLL is not
          copied — and the BepInEx plugin fails to JIT any code that touches those types
          at runtime. silent failure: Harmony swallows the resolution exception, the
@@ -130,16 +130,6 @@
     <Reference Include="UnityEngine.ParticleSystemModule">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>F:\Games\SPT-4.0\EscapeFromTarkov_Data\Managed\UnityEngine.ParticleSystemModule.dll</HintPath>
-    </Reference>
-    <!-- IMGUI (OnGUI / GUIStyle / GUI.Box) for the debug raid-counter overlay -->
-    <Reference Include="UnityEngine.IMGUIModule">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>F:\Games\SPT-4.0\EscapeFromTarkov_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
-    </Reference>
-    <!-- TextRendering carries the FontStyle/TextAnchor enums GUIStyle uses -->
-    <Reference Include="UnityEngine.TextRenderingModule">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>F:\Games\SPT-4.0\EscapeFromTarkov_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
     </Reference>
     <!-- TextMeshPro for the icon caption (TMP_Text) used by inventory name labels -->
     <Reference Include="Unity.TextMeshPro">

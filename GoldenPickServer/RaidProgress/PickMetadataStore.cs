@@ -4,13 +4,11 @@ using SPTarkov.Server.Core.Models.Utils;
 
 namespace GoldenPick.RaidProgress;
 
-// per-pick metadata (color / name / description / number / owner / signature). lives at
-// `<mod-dir>/data/pick_metadata.json`, keyed by pickId. populated by admin grants AND by
-// crate unpacks (inherit-pickmeta copies the crate's signature + number to the new pick).
+// per-pick metadata (color / name / description / number / owner / kill count). lives at
+// `<mod-dir>/data/pick_metadata.json`, keyed by pickId. populated by award grants AND by
+// crate unpacks (inherit-pickmeta copies the crate's pick number to the new pick).
 //
 // the BepInEx client queries /goldenpick/pickmeta for sheen color + tooltip rendering.
-// the file is editable on disk but the embedded Ed25519 public-key verify gates real
-// picks from forgeries.
 [Injectable(InjectionType.Singleton)]
 public class PickMetadataStore(ISptLogger<PickMetadataStore> logger)
 {
@@ -77,9 +75,9 @@ public class PickMetadataStore(ISptLogger<PickMetadataStore> logger)
     }
 
     // admin-edit update: overwrite ONLY the cosmetic fields (sheen color, name, description,
-    // number). owner_nickname, awarded_at, and signature stay as they were at original mint
-    // time — those are tied to the pick's signed identity and must not change. returns true
-    // if the record existed, false if no metadata was stored under pickId.
+    // number). owner_nickname and awarded_at stay as they were at original mint time — those
+    // are tied to the pick's original identity and must not change. returns true if the
+    // record existed, false if no metadata was stored under pickId.
     public bool UpdateCosmetics(string pickId, string? sheenColorHex, string? customName, string? customDescription, int? pickNumber)
     {
         lock (_lock)
