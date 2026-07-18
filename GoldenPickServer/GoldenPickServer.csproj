@@ -87,10 +87,6 @@
       <ServerModFilesDir>$(RepoRoot)ServerModFiles</ServerModFilesDir>
       <ClientBinDir>$(RepoRoot)GoldenPickClient\bin\$(Configuration)\netstandard2.1</ClientBinDir>
       <ClientDll>$(ClientBinDir)\GoldenPickClient.dll</ClientDll>
-      <!-- runtime dep CounterfeitDetector pulls in for Ed25519 signature verify. MUST ship
-           in the zip — without it the plugin loads but the unpack patch silently throws when
-           it tries to JIT the verifier code, vanilla EFT unpack runs, anti-cheat is dead. -->
-      <ClientBouncyCastleDll>$(ClientBinDir)\BouncyCastle.Cryptography.dll</ClientBouncyCastleDll>
     </PropertyGroup>
     <ItemGroup>
       <AllServerModFiles Include="$(ServerModFilesDir)\**\*" />
@@ -107,11 +103,9 @@
       SourceFiles="@(AllServerModFiles)"
       DestinationFiles="@(AllServerModFiles->'$(ServerOutDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
 
-    <!-- client side: main DLL + BouncyCastle runtime dep -->
+    <!-- client side: main DLL -->
     <Error Text="Client DLL not found at $(ClientDll). Build the solution (or the client project) before packaging." Condition="!Exists('$(ClientDll)')" />
-    <Error Text="BouncyCastle.Cryptography.dll not found at $(ClientBouncyCastleDll). The client csproj should have CopyLocalLockFileAssemblies=true — rebuild the client project first." Condition="!Exists('$(ClientBouncyCastleDll)')" />
     <Copy SourceFiles="$(ClientDll)" DestinationFolder="$(ClientOutDir)" />
-    <Copy SourceFiles="$(ClientBouncyCastleDll)" DestinationFolder="$(ClientOutDir)" />
 
     <ZipDirectory SourceDirectory="$(TempPackageDir)" DestinationFile="$(RepoRoot)$(ZipFileName)" Overwrite="true" />
     <RemoveDir Directories="$(TempPackageDir)" />
